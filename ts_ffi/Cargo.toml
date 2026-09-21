@@ -15,7 +15,22 @@ publish.workspace = true
 tailscale.workspace = true
 ts_keys.workspace = true
 
-tokio = { workspace = true, features = ["full"] }
+# Explicitly NOT "full". That pulls tokio's `signal` and `process` features,
+# and `signal` brings signal-hook-registry, which does not compile for
+# xtensa-esp32s3-espidf: ESP-IDF's libc has no siginfo_t, SIGKILL, SIGSTOP,
+# SA_RESTART, SA_SIGINFO, or sigaction.sa_sigaction. Nothing here uses signals
+# or subprocesses, so listing what we actually need fixes the cross-build and
+# trims the native one at the same time.
+tokio = { workspace = true, features = [
+  "fs",
+  "io-util",
+  "macros",
+  "net",
+  "rt",
+  "rt-multi-thread",
+  "sync",
+  "time",
+] }
 tracing = { workspace = true, features = ["release_max_level_info"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

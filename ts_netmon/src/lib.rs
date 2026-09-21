@@ -14,7 +14,13 @@ pub mod windows;
 
 pub use family::{Family, FamilyOrBoth};
 pub use id::{InterfaceId, MonType};
-pub use netmon::{BoxStream, Netmon, PlatformMon, platform_mon};
+pub use netmon::{BoxStream, Netmon, platform_mon};
+// `PlatformMon` only exists where there is a platform backend. `platform_mon()`
+// already degrades to None elsewhere, but this re-export was not gated to match,
+// so the crate failed to compile for any other target -- xtensa-esp32s3-espidf
+// among them.
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+pub use netmon::PlatformMon;
 
 /// An event produced by the network monitor.
 #[derive(Debug, Clone, PartialEq, Eq)]
