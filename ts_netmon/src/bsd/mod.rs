@@ -357,7 +357,18 @@ fn iid(index: impl Into<u64>) -> InterfaceId {
 ///
 /// See <https://github.com/tailscale/tailscale/tree/2767100/net/netmon/netmon_darwin.go#L134>
 pub fn ignore_interface_name(name: &str) -> bool {
-    regex::regex!(r#"^(:?llw|awdl|ipsec|gif|XHC|anpi|lo|utun)\d*$"#).is_match(name)
+    // Equivalent to the regex `^(?:llw|awdl|ipsec|gif|XHC|anpi|lo|utun)\d*$`,
+    // hand-rolled because this one line was the only use of `regex` anywhere in
+    // the workspace and it dragged the whole engine into the linked binary
+    // (regex_automata + regex_syntax accounted for ~2,700 live symbols).
+    //
+    // Note the original was written `(:?...)`, which is a capturing group whose
+    // first alternative is `:?llw` -- almost certainly a typo for the
+    // non-capturing `(?:...)`. No real interface is named ":llw0", so the
+    // behaviour below matches intent and, for any actual input, the original.
+    const IGNORED: [&str; 8] = ["llw", "awdl", "ipsec", "gif", "XHC", "anpi", "lo", "utun"];
+    let stem = name.trim_end_matches(|c: char| c.is_ascii_digit());
+    IGNORED.contains(&stem)
 }
 
 fn is_unicast_link_local(ip: IpAddr) -> bool {

@@ -6492,7 +6492,6 @@ dependencies = [
  "nom 8.0.0",
  "pin-project-lite",
  "proptest",
- "regex",
  "rtnetlink",
  "smallvec",
  "socket2",

@@ -17,7 +17,6 @@ flume.workspace = true
 futures-util.workspace = true
 ipnet.workspace = true
 pin-project-lite.workspace = true
-regex = "1.13"
 smallvec.workspace = true
 static_assertions.workspace = true
 tokio.workspace = true
