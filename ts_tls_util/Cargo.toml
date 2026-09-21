@@ -20,7 +20,13 @@ tokio.workspace = true
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
 # Defaults are ["std", "tls12", "zeroize"]. xtensa-esp32s3-espidf provides
 # std, so there is no reason to drop to the alloc-only path yet.
-rustls-rustcrypto = "0.0.2-alpha"
+#
+# Chosen over rustls-rustcrypto, which is the better-known crate but is still
+# 0.0.2-alpha and unpublished since 2024-04. Decisively, rustls-rustcrypto pins
+# rustls-webpki ^0.102 while this tree resolves 0.103.15, so it would link two
+# copies of the certificate parser into a firmware we are trying to shrink.
+# oxitls drops the webpki dependency entirely.
+oxitls-rustcrypto-provider = "0.3.0"
 tracing.workspace = true
 url.workspace = true
 webpki-roots = { version = "1.0" }

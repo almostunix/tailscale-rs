@@ -72,7 +72,7 @@ impl ServerCertVerifier for InsecureCertVerifier {
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls_rustcrypto::provider()
+        oxitls_rustcrypto_provider::provider()
             .signature_verification_algorithms
             .supported_schemes()
     }

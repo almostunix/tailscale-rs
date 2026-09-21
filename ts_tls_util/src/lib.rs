@@ -49,7 +49,7 @@ where
     // default: with no backend feature enabled there is no default to fall back
     // on, and `ClientConfig::builder()` would panic at run time instead of
     // failing to compile.
-    let mut rustls_config = ClientConfig::builder_with_provider(Arc::new(rustls_rustcrypto::provider()))
+    let mut rustls_config = ClientConfig::builder_with_provider(Arc::new(oxitls_rustcrypto_provider::provider()))
         .with_safe_default_protocol_versions()
         .expect("rustcrypto provider supports the default protocol versions")
         .with_root_certificates(ROOT_CERT_STORE.clone())
