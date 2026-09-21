@@ -42,7 +42,29 @@ pub use tcp::{
 pub use udp::{ts_udp_bind, ts_udp_close, ts_udp_recvfrom, ts_udp_sendto, udp_socket};
 
 static TOKIO_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    // One worker, not a worker per core.
+    //
+    // A plain `new_current_thread()` runtime does NOT work here, and the
+    // failure is silent-looking: the node joins the tailnet and reports a
+    // listener, then every connection to it times out. With no worker, spawned
+    // tasks -- the control-plane poll, the DERP connection, the netstack --
+    // only advance while some thread is inside `block_on`, and ts_ffi's
+    // blocking API returns as soon as its own future resolves. Measured: the
+    // join succeeds, `ts_tcp_listen` succeeds, and `meshtastic --host <tailnet
+    // ip>` fails with ETIMEDOUT.
+    //
+    // Making current_thread work would mean a dedicated driver thread parked
+    // on the runtime plus reworking all 8 block_on sites to dispatch 'static
+    // futures over a channel -- and that driver thread costs exactly the one
+    // thread `worker_threads(1)` costs, so it buys no RAM. It does not buy
+    // meaningful flash either: a current_thread build measured 4,233,724 bytes
+    // of __text against 4,242,880 here, a 9KB (0.2%) difference.
+    //
+    // So cap the workers instead. On a 2-core ESP32-S3 tokio would otherwise
+    // start 2. `thread_stack_size` is the next lever for the board and wants
+    // tuning against real stack-high-water marks, not a guess from here.
     let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
         .enable_all()
         .build()
         .unwrap();
