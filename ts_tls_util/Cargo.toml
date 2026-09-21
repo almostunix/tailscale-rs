@@ -14,7 +14,13 @@ rust-version.workspace = true
 [dependencies]
 # Unconditionally required dependencies.
 tokio.workspace = true
-tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs"] }
+# Phase 2: aws-lc-rs cannot build for Xtensa (C + hand-written asm with no
+# Xtensa support), so the backend has to be pure Rust. `tls12` is kept because
+# dropping it would be a protocol change, not just a crypto one.
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
+# Defaults are ["std", "tls12", "zeroize"]. xtensa-esp32s3-espidf provides
+# std, so there is no reason to drop to the alloc-only path yet.
+rustls-rustcrypto = "0.0.2-alpha"
 tracing.workspace = true
 url.workspace = true
 webpki-roots = { version = "1.0" }

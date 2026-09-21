@@ -45,7 +45,13 @@ where
     Io: AsyncRead + AsyncWrite + Unpin,
 {
     // TODO(npry): custom tls cert verifier to support commonname overrides and self-signed certs
-    let mut rustls_config = ClientConfig::builder()
+    // Name the provider explicitly rather than relying on rustls' process-wide
+    // default: with no backend feature enabled there is no default to fall back
+    // on, and `ClientConfig::builder()` would panic at run time instead of
+    // failing to compile.
+    let mut rustls_config = ClientConfig::builder_with_provider(Arc::new(rustls_rustcrypto::provider()))
+        .with_safe_default_protocol_versions()
+        .expect("rustcrypto provider supports the default protocol versions")
         .with_root_certificates(ROOT_CERT_STORE.clone())
         .with_no_client_auth();
 
