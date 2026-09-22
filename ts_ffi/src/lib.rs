@@ -133,7 +133,26 @@ static TRACING_ONCE: Once = Once::new();
 #[unsafe(no_mangle)]
 pub extern "C" fn ts_init_tracing() {
     TRACING_ONCE.call_once(|| {
-        let builder = tracing_subscriber::fmt().with_max_level(LevelFilter::INFO);
+        // Native builds can raise the level for investigation:
+        // TS_LOG_LEVEL=debug|trace. (No per-module filtering: the env-filter
+        // feature was dropped for flash size, so grep the output.) Firmware
+        // stays at INFO.
+        //
+        // NB: this alone does nothing in a release build. tracing is compiled
+        // with release_max_level_info (root and ts_ffi Cargo.toml), which
+        // removes debug/trace call sites at compile time. For an investigation,
+        // drop that feature locally, rebuild, and restore it afterwards -- it
+        // is a real flash saving on the firmware.
+        #[cfg(not(target_os = "espidf"))]
+        let level = match std::env::var("TS_LOG_LEVEL").as_deref() {
+            Ok("trace") => LevelFilter::TRACE,
+            Ok("debug") => LevelFilter::DEBUG,
+            _ => LevelFilter::INFO,
+        };
+        #[cfg(target_os = "espidf")]
+        let level = LevelFilter::INFO;
+
+        let builder = tracing_subscriber::fmt().with_max_level(level);
 
         // On ESP-IDF every write to stdout failed ("Unable to write an event to
         // the Writer for this Subscriber! Error: Success (os error 0)") and

@@ -323,12 +323,29 @@ impl Handshake {
         peer: &PeerConfig,
         now: Instant,
     ) -> Option<PacketMut> {
+        // WireGuard requires rejecting any initiation whose timestamp is not
+        // strictly greater than the greatest already accepted from this peer.
+        // Two things were wrong here: the comparison was `<`, so an exact
+        // duplicate passed; and last_seen_timestamp was never written, so the
+        // check could not fire at all.
+        //
+        // Duplicates are routine, not exotic: a Tailscale peer that no longer
+        // trusts its best path sends to several at once, so one initiation
+        // can arrive over DERP and over direct UDP within milliseconds.
+        // Answering both replaced the pending session the peer had already
+        // completed on, and its data then hit "session not found" for ~30s
+        // until it gave up and re-handshook -- the stall seen on the first
+        // connection after a node had been idle. Without the check, a captured
+        // initiation could also be replayed at will to knock the node off its
+        // live session.
         if let Some(last_seen_timestamp) = self.last_seen_timestamp
-            && handshake.timestamp < last_seen_timestamp
+            && handshake.timestamp <= last_seen_timestamp
         {
             tracing::trace!("handshake replay detected, bailing out");
             return None;
         }
+
+        self.last_seen_timestamp = Some(handshake.timestamp);
 
         let session_handle = endpoint.ids.allocate_session(peer.id);
         let mut response = HandshakeResponse {
@@ -424,6 +441,81 @@ mod tests {
 
     use super::*;
     use crate::PeerId;
+
+    /// The same initiation arriving twice -- as it does when a Tailscale peer
+    /// sends over several paths at once (DERP and direct UDP) -- must be
+    /// answered once. Seen on a live tailnet: the peer completed on B's first
+    /// response while B, having answered the duplicate, had discarded that
+    /// session; every data packet then hit "session not found" until the peer
+    /// gave up and re-handshook ~30s later.
+    #[test]
+    fn duplicate_initiation_is_answered_once() {
+        let (a_static, b_static) = (NodeKeyPair::random(), NodeKeyPair::random());
+        let psk = rand::random();
+
+        let mut a_state = EndpointState::from(a_static.clone());
+        let mut a_handshake = Handshake::new(&b_static.public);
+        let a_peer = PeerConfig::new(PeerId(1), b_static.public, psk);
+        let init_pkt = a_handshake.initiate(&mut a_state, &a_peer, Instant::now());
+        let duplicate = init_pkt.clone();
+
+        let b_mac_recv = MACReceiver::new(&b_static.public);
+        let mut b_handshake = Handshake::new(&a_state.my_key.public);
+        let mut b_state = EndpointState::from(b_static.clone());
+        let b_peer = PeerConfig::new(PeerId(2), a_static.public, psk);
+
+        let first = ReceivedHandshake::new(init_pkt, &b_static, &b_mac_recv).expect("parse");
+        let mut response_pkt = b_handshake
+            .respond(first, &mut b_state, &b_peer, Instant::now())
+            .expect("B should respond to the first copy");
+
+        let second = ReceivedHandshake::new(duplicate, &b_static, &b_mac_recv).expect("parse");
+        assert!(
+            b_handshake
+                .respond(second, &mut b_state, &b_peer, Instant::now())
+                .is_none(),
+            "B must not answer a duplicate of an initiation it already answered"
+        );
+
+        // A completes on B's first response, as the real peer did.
+        let response_pkt = HandshakeResponse::try_mut_from_bytes(response_pkt.as_mut()).unwrap();
+        let a_session = a_handshake
+            .finish(response_pkt, &mut a_state, &a_peer, Instant::now())
+            .expect("A should complete on B's first response");
+        let plaintext = vec![PacketMut::from("want_config".as_bytes())];
+        let mut packets = plaintext.clone();
+        a_session.encrypt(packets.iter_mut());
+
+        let (_b_session, received) = b_handshake
+            .confirm(packets)
+            .expect("B should still hold the session A completed on");
+        assert_eq!(received, plaintext);
+    }
+
+    /// A genuinely new initiation from the same peer (later timestamp) must
+    /// still be answered -- the check is against replays, not rekeys.
+    #[test]
+    fn newer_initiation_is_answered() {
+        let (a_static, b_static) = (NodeKeyPair::random(), NodeKeyPair::random());
+        let psk = rand::random();
+        let mut a_state = EndpointState::from(a_static.clone());
+        let a_peer = PeerConfig::new(PeerId(1), b_static.public, psk);
+        let b_mac_recv = MACReceiver::new(&b_static.public);
+        let mut b_handshake = Handshake::new(&a_state.my_key.public);
+        let mut b_state = EndpointState::from(b_static.clone());
+        let b_peer = PeerConfig::new(PeerId(2), a_static.public, psk);
+
+        for attempt in 0..2 {
+            let mut a_handshake = Handshake::new(&b_static.public);
+            let pkt = a_handshake.initiate(&mut a_state, &a_peer, Instant::now());
+            let rx = ReceivedHandshake::new(pkt, &b_static, &b_mac_recv).expect("parse");
+            assert!(
+                b_handshake.respond(rx, &mut b_state, &b_peer, Instant::now()).is_some(),
+                "initiation {attempt} carries a newer timestamp and must be answered"
+            );
+            std::thread::sleep(core::time::Duration::from_millis(5));
+        }
+    }
 
     #[test]
     fn test_handshake() {
