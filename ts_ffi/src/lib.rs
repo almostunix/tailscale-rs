@@ -61,13 +61,33 @@ static TOKIO_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     // of __text against 4,242,880 here, a 9KB (0.2%) difference.
     //
     // So cap the workers instead. On a 2-core ESP32-S3 tokio would otherwise
-    // start 2. `thread_stack_size` is the next lever for the board and wants
-    // tuning against real stack-high-water marks, not a guess from here.
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .unwrap();
+    // start 2.
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.worker_threads(1).enable_all();
+
+    // Rust's default thread stack is 2 MiB, which is more than an ESP32-S3
+    // has. Observed on hardware/simulator: runtime construction failed, the
+    // `.unwrap()` below panicked, and the panic printer then tripped the TLSF
+    // heap assert while allocating its own mutex -- so the visible symptom was
+    // "assert failed: block_locate_free", several layers away from the cause.
+    //
+    // The blocking pool matters as much as the workers: its default cap is 512
+    // threads, and each one would take a stack of this size the moment it is
+    // spawned. ts_ffi only ever has a handful of blocking calls outstanding.
+    //
+    // 64 KiB is sized for the TLS handshake path (rustls + p384), which is the
+    // deepest stack consumer here. It is a starting point, not a measurement:
+    // tune it against real high-water marks with uxTaskGetStackHighWaterMark.
+    #[cfg(target_os = "espidf")]
+    {
+        builder.thread_stack_size(64 * 1024);
+        builder.max_blocking_threads(4);
+    }
+
+    let rt = builder.build().expect(
+        "tokio runtime construction failed -- on ESP32 this is almost always \
+         thread stack allocation; see thread_stack_size above",
+    );
 
     tracing::info!("started tokio runtime");
 
