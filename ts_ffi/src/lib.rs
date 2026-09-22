@@ -75,13 +75,26 @@ static TOKIO_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     // threads, and each one would take a stack of this size the moment it is
     // spawned. ts_ffi only ever has a handful of blocking calls outstanding.
     //
-    // 64 KiB is sized for the TLS handshake path (rustls + p384), which is the
-    // deepest stack consumer here. It is a starting point, not a measurement:
-    // tune it against real high-water marks with uxTaskGetStackHighWaterMark.
+    // This is the size that actually takes effect. Rust's std::thread calls
+    // pthread_attr_setstacksize explicitly, which overrides the stack_size in
+    // esp_pthread_set_cfg -- so the C++ side can choose *where* these stacks
+    // are allocated (internal DRAM vs PSRAM) but not how big they are.
+    //
+    // Measured on an ESP32-S3 at the moment the runtime is built, with WiFi,
+    // mDNS, NTP and both web servers already up: 110,700 bytes of internal DRAM
+    // free, largest block 69,620. At 64 KiB the worker thread consumed that
+    // block and the first blocking-pool thread -- which tokio::fs needs to read
+    // the key state -- failed with ENOMEM, panicking the runtime and rebooting
+    // the node. The pool is not optional: it is on the critical path.
+    //
+    // 24 KiB leaves room for a worker plus two or three blocking threads.
+    // Still not a high-water-mark measurement; verify with
+    // uxTaskGetStackHighWaterMark on hardware before trusting it, because the
+    // rustls + p384 handshake is deeper than anything else here.
     #[cfg(target_os = "espidf")]
     {
-        builder.thread_stack_size(64 * 1024);
-        builder.max_blocking_threads(4);
+        builder.thread_stack_size(24 * 1024);
+        builder.max_blocking_threads(2);
     }
 
     let rt = builder.build().expect(
