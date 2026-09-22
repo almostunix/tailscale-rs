@@ -229,17 +229,51 @@ pub extern "C" fn ts_deinit(dev: Box<device>) {
     drop(dev)
 }
 
+/// Block until `fut` yields this node's own address, waiting through control
+/// reconnects.
+///
+/// The control runner answers an address query immediately once registered;
+/// before that it parks the request and replies when registration completes.
+/// When it restarts to reconnect -- which it does after any failed dial,
+/// timed-out registration or dead map stream -- the parked request is dropped
+/// and surfaces as Internal(Actor). That is a transient state by construction,
+/// and these functions are documented to block until the address is available,
+/// so retry it rather than report it.
+///
+/// Before this, an embedder reading the error as final tore the runtime down
+/// and with it the reconnection that was already under way.
+fn wait_for_own_addr<T, F, Fut>(what: &str, mut fut: F) -> Option<T>
+where
+    F: FnMut() -> Fut,
+    Fut: core::future::Future<Output = Result<T, tailscale::Error>>,
+{
+    let mut waited = 0u32;
+    loop {
+        match TOKIO_RUNTIME.block_on(fut()) {
+            Ok(addr) => return Some(addr),
+            Err(tailscale::Error::Internal(tailscale::InternalErrorKind::Actor))
+            | Err(tailscale::Error::Timeout) => {
+                if waited == 0 {
+                    tracing::warn!(what, "control connection restarting; still waiting for address");
+                }
+                waited = waited.saturating_add(1);
+                std::thread::sleep(core::time::Duration::from_secs(1));
+            }
+            Err(e) => {
+                tracing::error!(error = %e, what, "getting own address");
+                return None;
+            }
+        }
+    }
+}
+
 /// Get the IPv4 address of the Tailscale node, blocking until it's available.
 ///
 /// Returns a negative number on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn ts_ipv4_addr(dev: &device, dst: &mut in_addr_t) -> ffi::c_int {
-    let addr = match TOKIO_RUNTIME.block_on(dev.0.ipv4_addr()) {
-        Ok(addr) => addr,
-        Err(e) => {
-            tracing::error!(error = %e, "getting ipv4");
-            return -1;
-        }
+    let Some(addr) = wait_for_own_addr("ipv4", || dev.0.ipv4_addr()) else {
+        return -1;
     };
 
     dst.0 = addr.octets();
@@ -252,12 +286,8 @@ pub extern "C" fn ts_ipv4_addr(dev: &device, dst: &mut in_addr_t) -> ffi::c_int 
 /// Returns a negative number on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn ts_ipv6_addr(dev: &device, dst: &mut in6_addr_t) -> ffi::c_int {
-    let addr = match TOKIO_RUNTIME.block_on(dev.0.ipv6_addr()) {
-        Ok(addr) => addr,
-        Err(e) => {
-            tracing::error!(error = %e, "getting ipv6");
-            return -1;
-        }
+    let Some(addr) = wait_for_own_addr("ipv6", || dev.0.ipv6_addr()) else {
+        return -1;
     };
 
     dst.0 = addr.segments();

@@ -51,6 +51,17 @@ pub struct RegionResult {
     pub connected_remote: SocketAddr,
 }
 
+/// Probes in flight at once where concurrency is capped (ESP-IDF).
+#[cfg(target_os = "espidf")]
+const MAX_CONCURRENT_PROBES: usize = 3;
+
+/// Upper bound on one region's probe: TLS dial plus warmup and sample requests.
+/// Generous, because on an ESP32 a single TLS handshake can take seconds.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Upper bound on the whole measurement, after which partial results are used.
+const MEASUREMENT_DEADLINE: Duration = Duration::from_secs(60);
+
 /// Measure all regions in the supplied [`DerpMap`] and return a binary heap sorted by
 /// mean per-region sample time.
 #[tracing::instrument(skip_all)]
@@ -64,15 +75,23 @@ pub async fn measure_derp_map(map: &DerpMap, config: &Config) -> Vec<RegionResul
     // application) and ran ~30 handshakes at once on one core, starving the
     // application's main loop until the task watchdog reset the chip.
     //
-    // Only complete_threshold results are needed, so that many in flight
-    // finishes as soon as the network allows. The trade-off: the map is a
-    // BTreeMap, so the lowest region IDs are probed first and the rest are
-    // abandoned once enough answer -- the home region is chosen from those
-    // rather than from every region.
+    // With a cap in force every region is still measured, just a few at a
+    // time, until they finish or MEASUREMENT_DEADLINE passes. Stopping after
+    // complete_threshold answers, as the uncapped path does, would pick the
+    // home region from whichever regions were probed first -- the lowest IDs,
+    // since the map is a BTreeMap: New York, San Francisco, Singapore. Every
+    // packet to this node goes through its home region, so for a node in
+    // Europe that would be a permanent transatlantic detour. The cost is up to
+    // the deadline longer before the node is reachable at startup.
     #[cfg(target_os = "espidf")]
-    let permits = Some(Arc::new(tokio::sync::Semaphore::new(config.complete_threshold.max(1))));
+    let permits = Some(Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PROBES)));
+    // Native builds leave concurrency unbounded, but can impose the ESP-IDF
+    // cap for testing: TS_TEST_DERP_PROBE_CONCURRENCY=N.
     #[cfg(not(target_os = "espidf"))]
-    let permits: Option<Arc<tokio::sync::Semaphore>> = None;
+    let permits: Option<Arc<tokio::sync::Semaphore>> = std::env::var("TS_TEST_DERP_PROBE_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|n| Arc::new(tokio::sync::Semaphore::new(n.max(1))));
 
     for (&id, region) in map {
         if region.info.no_measure_no_home {
@@ -91,9 +110,35 @@ pub async fn measure_derp_map(map: &DerpMap, config: &Config) -> Vec<RegionResul
                 Some(sem) => sem.acquire_owned().await.ok(),
                 None => None,
             };
-            let sample_info = crate::measure_https_latency(&servers, config)
-                .await
-                .map(|(dur, _info, addr)| (dur, addr));
+            // Nothing below this has a timeout of its own: a region whose
+            // servers accept the TCP connection but never answer would hold
+            // this task -- and, on ESP-IDF, one of the few permits -- forever.
+            // Test hook, native only: TS_TEST_DERP_PROBE_HANG_REGIONS=1,2,3 makes
+            // those regions' probes never finish -- the suspected ESP32 failure,
+            // where stalled probes held every permit and no home region was
+            // ever chosen.
+            #[cfg(not(target_os = "espidf"))]
+            if std::env::var("TS_TEST_DERP_PROBE_HANG_REGIONS")
+                .map(|v| v.split(',').any(|r| r.trim() == id.to_string()))
+                .unwrap_or(false)
+            {
+                tracing::warn!(region_id = %id, "TEST HOOK: latency probe will hang");
+                let hang = core::future::pending::<Option<(Duration, SocketAddr)>>();
+                let sample_info = tokio::time::timeout(PROBE_TIMEOUT, hang).await.ok().flatten();
+                if sample_info.is_none() {
+                    tracing::warn!(region_id = %id, "latency probe timed out");
+                }
+                return Result::<_, crate::https::Error>::Ok((id, latency_map_key, sample_info));
+            }
+
+            let sample_info =
+                match tokio::time::timeout(PROBE_TIMEOUT, crate::measure_https_latency(&servers, config)).await {
+                    Ok(result) => result.map(|(dur, _info, addr)| (dur, addr)),
+                    Err(_) => {
+                        tracing::warn!(region_id = %id, "latency probe timed out");
+                        None
+                    }
+                };
 
             Result::<_, crate::https::Error>::Ok((id, latency_map_key, sample_info))
         });
@@ -124,8 +169,24 @@ pub async fn measure_derp_map(map: &DerpMap, config: &Config) -> Vec<RegionResul
     };
 
     let mut timeout = core::pin::pin![tokio::time::sleep(config.min_timeout)];
+    let mut deadline = core::pin::pin![tokio::time::sleep(MEASUREMENT_DEADLINE)];
 
-    while !(out.len() >= config.complete_threshold && timeout.is_elapsed()) {
+    // See `permits`: when capped, wait for every region (or the deadline).
+    let complete_threshold = if permits.is_some() {
+        joinset.len()
+    } else {
+        config.complete_threshold
+    };
+
+    while !(out.len() >= complete_threshold && timeout.is_elapsed()) {
+        // A tokio Sleep that has fired stays ready. Without this guard the
+        // timeout branch wins every iteration once min_timeout has passed and
+        // fewer than complete_threshold results are in -- a busy loop that holds
+        // a worker until the probes finish. Invisible on a desktop, where
+        // results arrive in milliseconds; seconds of pinned CPU on an ESP32,
+        // where each probe is a TLS handshake.
+        let timeout_pending = !timeout.is_elapsed();
+
         tokio::select! {
             ret = joinset.join_next() => {
                 let Some(ret) = ret else {
@@ -134,7 +195,14 @@ pub async fn measure_derp_map(map: &DerpMap, config: &Config) -> Vec<RegionResul
 
                 process_joinset_result(&mut out, ret);
             },
-            _ = &mut timeout => {},
+            _ = &mut timeout, if timeout_pending => {},
+            _ = &mut deadline => {
+                // Better a home region chosen from partial results than none:
+                // with no measurement the node never advertises a preferred
+                // DERP region and, being relay-only, is unreachable.
+                tracing::warn!(results = out.len(), "derp latency measurement deadline reached");
+                break;
+            },
         }
     }
 
@@ -144,6 +212,16 @@ pub async fn measure_derp_map(map: &DerpMap, config: &Config) -> Vec<RegionResul
     }
 
     out.sort();
+
+    match out.first() {
+        Some(best) => tracing::info!(
+            region_id = %best.id,
+            latency = ?best.latency,
+            measured = out.len(),
+            "derp latency measured; home region chosen"
+        ),
+        None => tracing::warn!("derp latency measurement produced no results"),
+    }
 
     out
 }

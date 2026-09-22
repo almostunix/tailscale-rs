@@ -138,6 +138,7 @@ impl kameo::Actor for Runtime {
                 config: config.control_config,
                 auth_key: config.auth_key,
                 env: env.clone(),
+                failures: Default::default(),
             },
         )
         .spawn()
