@@ -41,6 +41,15 @@ pub use tcp::{
 };
 pub use udp::{ts_udp_bind, ts_udp_close, ts_udp_recvfrom, ts_udp_sendto, udp_socket};
 
+#[cfg(target_os = "espidf")]
+mod esp_alloc;
+
+/// See esp_alloc.rs: keeps Rust's heap out of the internal DRAM that thread
+/// stacks and FreeRTOS objects need.
+#[cfg(target_os = "espidf")]
+#[global_allocator]
+static GLOBAL: esp_alloc::PsramFirst = esp_alloc::PsramFirst;
+
 static TOKIO_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     // One worker, not a worker per core.
     //
@@ -77,23 +86,25 @@ static TOKIO_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     //
     // This is the size that actually takes effect. Rust's std::thread calls
     // pthread_attr_setstacksize explicitly, which overrides the stack_size in
-    // esp_pthread_set_cfg -- so the C++ side can choose *where* these stacks
+    // esp_pthread_set_cfg -- so the embedder can choose *where* these stacks
     // are allocated (internal DRAM vs PSRAM) but not how big they are.
     //
-    // Measured on an ESP32-S3 at the moment the runtime is built, with WiFi,
-    // mDNS, NTP and both web servers already up: 110,700 bytes of internal DRAM
-    // free, largest block 69,620. At 64 KiB the worker thread consumed that
-    // block and the first blocking-pool thread -- which tokio::fs needs to read
-    // the key state -- failed with ENOMEM, panicking the runtime and rebooting
-    // the node. The pool is not optional: it is on the critical path.
+    // Measured on an ESP32-S3: one poll of ts_runtime's actor startup used
+    // ~28.5 KB of worker stack (13.6 KB in Runtime::on_start's state machine,
+    // 10.5 KB in tokio's task poll, 4.5 KB in the task-local wrapper). At
+    // 24 KiB it overflowed by ~5.7 KB and corrupted a neighbouring FreeRTOS
+    // object, surfacing as an assert in xQueueSemaphoreTake.
     //
-    // 24 KiB leaves room for a worker plus two or three blocking threads.
-    // Still not a high-water-mark measurement; verify with
-    // uxTaskGetStackHighWaterMark on hardware before trusting it, because the
-    // rustls + p384 handshake is deeper than anything else here.
+    // That depth cannot come from internal DRAM, which is down to ~55 KB once
+    // the runtime is up. The embedder puts these stacks in PSRAM, which is only
+    // possible because no tokio thread does file I/O on ESP-IDF (see key_fs in
+    // src/config.rs) -- a PSRAM-stacked task may not disable the flash cache.
+    //
+    // 64 KiB is ~2.2x the measured peak. The rustls + p384 handshake has not
+    // been measured yet and may be deeper; check uxTaskGetStackHighWaterMark.
     #[cfg(target_os = "espidf")]
     {
-        builder.thread_stack_size(24 * 1024);
+        builder.thread_stack_size(64 * 1024);
         builder.max_blocking_threads(2);
     }
 

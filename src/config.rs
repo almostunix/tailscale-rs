@@ -148,6 +148,41 @@ pub enum BadFormatBehavior {
     Overwrite,
 }
 
+/// Filesystem access for the key-state file.
+///
+/// Everywhere but ESP-IDF this is tokio::fs, which hands each call to tokio's
+/// blocking pool. On ESP-IDF that is exactly what cannot happen: a FreeRTOS task
+/// whose stack lives in PSRAM may not be the one that disables the flash cache,
+/// and every flash read or write does. tokio's threads need stacks in PSRAM --
+/// one poll of the runtime's actor startup measured ~28.5 KB of stack, and
+/// internal DRAM is down to ~55 KB once the runtime is up -- so they must never
+/// do file I/O.
+///
+/// Plain std::fs inside these async fns instead runs on whichever thread is
+/// polling the future. The only caller is load_key_file, driven through
+/// Runtime::block_on, which polls on the *calling* thread rather than a worker
+/// -- so the I/O stays on the embedder's thread, whose stack it controls. The
+/// file is a few hundred bytes read once at startup; blocking briefly is fine.
+#[cfg(target_os = "espidf")]
+mod key_fs {
+    use std::{io, path::Path};
+
+    pub async fn create_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
+        std::fs::create_dir_all(path)
+    }
+
+    pub async fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
+        std::fs::read(path)
+    }
+
+    pub async fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> io::Result<()> {
+        std::fs::write(path, contents)
+    }
+}
+
+#[cfg(not(target_os = "espidf"))]
+use tokio::fs as key_fs;
+
 /// Attempt to load a file from a path. If it doesn't exist, create it with the
 /// specified default value.
 #[tracing::instrument(skip_all, fields(?bad_format_behavior, path = %path.as_ref().display()))]
@@ -161,14 +196,14 @@ where
 {
     let path = path.as_ref();
 
-    tokio::fs::create_dir_all(path.parent().unwrap())
+    key_fs::create_dir_all(path.parent().unwrap())
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "creating parent dirs for key file");
             crate::Error::KeyFileWrite
         })?;
 
-    match tokio::fs::read(path).await {
+    match key_fs::read(path).await {
         Ok(contents) => match serde_json::from_slice::<KeyState>(&contents) {
             Ok(state) => return Ok(state),
             Err(e) => match bad_format_behavior {
@@ -201,7 +236,7 @@ async fn try_write(
     path: impl AsRef<Path>,
     value: &impl serde::Serialize,
 ) -> Result<(), crate::Error> {
-    tokio::fs::write(
+    key_fs::write(
         path,
         serde_json::to_vec(value).map_err(|e| {
             tracing::error!(error = %e, "serializing key state");
