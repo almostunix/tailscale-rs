@@ -104,7 +104,8 @@ impl From<ts_runtime::Error> for Error {
             ts_runtime::ErrorKind::Timeout => Error::Timeout,
             ts_runtime::ErrorKind::ActorGone
             | ts_runtime::ErrorKind::MailboxFull
-            | ts_runtime::ErrorKind::ReplyErr => Error::Internal(InternalErrorKind::Actor),
+            | ts_runtime::ErrorKind::ReplyErr
+            | ts_runtime::ErrorKind::Io => Error::Internal(InternalErrorKind::Actor),
         }
     }
 }

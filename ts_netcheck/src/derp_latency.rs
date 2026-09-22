@@ -1,6 +1,7 @@
 //! Calculate latency to collections of derp servers.
 
 use core::{fmt::Debug, net::SocketAddr, time::Duration};
+use std::sync::Arc;
 
 use ts_control::DerpMap;
 use ts_derp::RegionId;
@@ -56,6 +57,23 @@ pub struct RegionResult {
 pub async fn measure_derp_map(map: &DerpMap, config: &Config) -> Vec<RegionResult> {
     let mut joinset = tokio::task::JoinSet::new();
 
+    // How many regions may be probed at once. Each probe is a TCP connection
+    // plus a full TLS handshake, and there is one per region (~30). Launching
+    // them together is fine on a desktop; on an ESP32 it exhausted the lwIP
+    // socket table (16 sockets in the Arduino libs, shared with the host
+    // application) and ran ~30 handshakes at once on one core, starving the
+    // application's main loop until the task watchdog reset the chip.
+    //
+    // Only complete_threshold results are needed, so that many in flight
+    // finishes as soon as the network allows. The trade-off: the map is a
+    // BTreeMap, so the lowest region IDs are probed first and the rest are
+    // abandoned once enough answer -- the home region is chosen from those
+    // rather than from every region.
+    #[cfg(target_os = "espidf")]
+    let permits = Some(Arc::new(tokio::sync::Semaphore::new(config.complete_threshold.max(1))));
+    #[cfg(not(target_os = "espidf"))]
+    let permits: Option<Arc<tokio::sync::Semaphore>> = None;
+
     for (&id, region) in map {
         if region.info.no_measure_no_home {
             tracing::trace!(region_id = %id, "skip! region is no_measure_no_home");
@@ -66,8 +84,13 @@ pub async fn measure_derp_map(map: &DerpMap, config: &Config) -> Vec<RegionResul
         let latency_map_key = format!("{id}-v4");
 
         let config = config.https;
+        let permits = permits.clone();
 
         joinset.spawn(async move {
+            let _permit = match permits {
+                Some(sem) => sem.acquire_owned().await.ok(),
+                None => None,
+            };
             let sample_info = crate::measure_https_latency(&servers, config)
                 .await
                 .map(|(dur, _info, addr)| (dur, addr));

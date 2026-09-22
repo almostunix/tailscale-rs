@@ -112,8 +112,14 @@ impl kameo::Actor for DirectActor {
             .ask::<DataplaneActor, _>(None, crate::dataplane::NewUnderlayTransport, true)
             .await?;
 
-        let sock4 = UdpSocket::bind("0.0.0.0:0").await.unwrap();
-        let sock4 = Arc::new(sock4);
+        let sock4 = match UdpSocket::bind("0.0.0.0:0").await {
+            Ok(sock) => Arc::new(sock),
+            Err(e) => {
+                // Not unwrap: see ErrorKind::Io.
+                tracing::error!(error = %e, "binding direct udp4 socket");
+                return Err(crate::Error::io());
+            }
+        };
         tracing::debug!(transport_id = ?id, local_addr = %sock4.local_addr().unwrap(), "direct udp4 socket bound");
 
         slf.attach_stream(udp_rx(sock4.clone()).boxed(), (), ());

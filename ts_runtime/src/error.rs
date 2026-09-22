@@ -43,6 +43,15 @@ pub struct Error {
 }
 
 impl Error {
+    /// An [`ErrorKind::Io`] error with no message or actor attached.
+    pub(crate) fn io() -> Self {
+        Self {
+            kind: ErrorKind::Io,
+            message_ty: None,
+            target_actor: None,
+        }
+    }
+
     /// Attach information about a destination actor to this error.
     ///
     /// Typically, `aref` will be `&ActorRef`.
@@ -187,6 +196,15 @@ pub enum ErrorKind {
 
     /// An operation timed out.
     Timeout,
+
+    /// An OS resource could not be acquired -- typically a socket.
+    ///
+    /// Actors used to unwrap these in on_start, on the reasoning that kameo
+    /// catches a panic there and the actor simply fails to start. That only
+    /// holds when panics unwind. Firmware builds use panic = "abort" to save
+    /// flash, and there a failed bind aborted the whole process -- on a device
+    /// with 16 sockets, where running out is an ordinary event.
+    Io,
 }
 
 impl core::fmt::Display for ErrorKind {
@@ -196,6 +214,7 @@ impl core::fmt::Display for ErrorKind {
             Self::ReplyErr => write!(f, "actor replied with an error"),
             Self::MailboxFull => write!(f, "actor's mailbox was full"),
             Self::Timeout => write!(f, "operation timed out"),
+            Self::Io => write!(f, "OS resource unavailable"),
         }
     }
 }

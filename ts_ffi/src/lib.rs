@@ -133,7 +133,17 @@ static TRACING_ONCE: Once = Once::new();
 #[unsafe(no_mangle)]
 pub extern "C" fn ts_init_tracing() {
     TRACING_ONCE.call_once(|| {
-        tracing_subscriber::fmt().with_max_level(LevelFilter::INFO).init();
+        let builder = tracing_subscriber::fmt().with_max_level(LevelFilter::INFO);
+
+        // On ESP-IDF every write to stdout failed ("Unable to write an event to
+        // the Writer for this Subscriber! Error: Success (os error 0)") and
+        // all of this crate's logging was silently lost -- yet that complaint
+        // itself, which tracing-subscriber prints to stderr, reached the serial
+        // console every time. So write to stderr there.
+        #[cfg(target_os = "espidf")]
+        let builder = builder.with_writer(std::io::stderr);
+
+        builder.init();
     });
 }
 

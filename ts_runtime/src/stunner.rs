@@ -64,8 +64,12 @@ impl kameo::Actor for Stunner {
     type Error = crate::Error;
 
     async fn on_start(env: Self::Args, slf: ActorRef<Self>) -> Result<Self, Self::Error> {
-        // panicking in on_start is fine
-        let stun = ts_netcheck::StunProber::try_new().await.unwrap();
+        // Not unwrap: a panic here is only contained when panics unwind, and
+        // firmware builds abort. See ErrorKind::Io.
+        let stun = ts_netcheck::StunProber::try_new().await.map_err(|e| {
+            tracing::error!(error = %e, "binding STUN sockets");
+            crate::Error::io()
+        })?;
         env.subscribe::<Arc<ts_control::StateUpdate>>(&slf).await?;
 
         env.scheduler
