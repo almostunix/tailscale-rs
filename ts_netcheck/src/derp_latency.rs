@@ -51,9 +51,25 @@ pub struct RegionResult {
     pub connected_remote: SocketAddr,
 }
 
-/// Probes in flight at once where concurrency is capped (ESP-IDF).
+/// HTTPS probes in flight at once where concurrency is capped (ESP-IDF).
+///
+/// One. tokio runs on a single worker there, and a TLS handshake is CPU-bound
+/// while it verifies the certificate chain, so concurrent handshakes do not
+/// overlap -- they interleave, and each takes as long in wall time as all of
+/// them together. DERP servers drop a connection whose handshake is not done
+/// within 30 s (derper's http.Server read/write timeouts). With 3 at a time the
+/// simulator saw every probe fail with an I/O error ~36 s in, and the worker
+/// was busy long enough that the control connection died as well.
 #[cfg(target_os = "espidf")]
-const MAX_CONCURRENT_PROBES: usize = 3;
+const MAX_CONCURRENT_PROBES: usize = 1;
+
+/// How long to wait for one STUN reply.
+const STUN_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// STUN requests per region, one after another; the fastest reply counts. The
+/// first datagram to a new destination is the one most likely to be lost or
+/// delayed (ARP, NAT state), and a region has several servers to spread over.
+const STUN_PROBES_PER_REGION: usize = 3;
 
 /// Upper bound on one region's probe: TLS dial plus warmup and sample requests.
 /// Generous, because on an ESP32 a single TLS handshake can take seconds.
@@ -64,8 +80,126 @@ const MEASUREMENT_DEADLINE: Duration = Duration::from_secs(60);
 
 /// Measure all regions in the supplied [`DerpMap`] and return a binary heap sorted by
 /// mean per-region sample time.
+///
+/// Where STUN is used first (ESP-IDF, or natively with `TS_TEST_DERP_STUN=1`),
+/// HTTPS probing only runs if no region answered over UDP.
 #[tracing::instrument(skip_all)]
 pub async fn measure_derp_map(map: &DerpMap, config: &Config) -> Vec<RegionResult> {
+    if stun_first() {
+        let out = measure_derp_map_stun(map).await;
+        if !out.is_empty() {
+            log_home_region(&out, "stun");
+            return out;
+        }
+        tracing::warn!("no derp region answered stun; falling back to https probes");
+    }
+
+    let out = measure_derp_map_https(map, config).await;
+    log_home_region(&out, "https");
+    out
+}
+
+/// Whether to measure region latency with STUN before trying HTTPS.
+///
+/// This is how the Go client measures: a STUN binding request is one small UDP
+/// exchange, where an HTTPS probe is a TCP connection plus a full TLS handshake
+/// per region -- milliseconds of CPU on a desktop, far more on an ESP32, and
+/// the map has ~30 regions. HTTPS stays as the fallback for networks that
+/// block UDP. Native builds keep HTTPS-first unless `TS_TEST_DERP_STUN=1`.
+fn stun_first() -> bool {
+    #[cfg(target_os = "espidf")]
+    return true;
+
+    #[cfg(not(target_os = "espidf"))]
+    return std::env::var("TS_TEST_DERP_STUN").is_ok_and(|v| v == "1");
+}
+
+fn log_home_region(out: &[RegionResult], method: &str) {
+    match out.first() {
+        Some(best) => tracing::info!(
+            region_id = %best.id,
+            latency = ?best.latency,
+            measured = out.len(),
+            method,
+            "derp latency measured; home region chosen"
+        ),
+        None => tracing::warn!(method, "derp latency measurement produced no results"),
+    }
+}
+
+/// Measure every region's latency with STUN over IPv4, all regions at once.
+///
+/// Returns no results if the STUN sockets cannot be bound or nothing answers.
+async fn measure_derp_map_stun(map: &DerpMap) -> Vec<RegionResult> {
+    let prober = match crate::StunProber::try_new().await {
+        Ok(prober) => Arc::new(prober),
+        Err(e) => {
+            tracing::warn!(error = %e, "binding stun sockets for latency probes");
+            return vec![];
+        }
+    };
+
+    let mut joinset = tokio::task::JoinSet::new();
+
+    for (&id, region) in map {
+        if region.info.no_measure_no_home {
+            continue;
+        }
+
+        // Servers whose address needs a DNS lookup are left to the HTTPS
+        // fallback; Tailscale's map gives fixed addresses.
+        let targets = region
+            .servers
+            .iter()
+            .filter_map(|server| match (server.ipv4, server.stun_port) {
+                (ts_derp::IpUsage::FixedAddr(ip), Some(port)) => Some(SocketAddr::from((ip, port))),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            continue;
+        }
+
+        let prober = prober.clone();
+        joinset.spawn(async move {
+            let mut best: Option<(Duration, SocketAddr)> = None;
+
+            for target in targets.iter().cycle().take(STUN_PROBES_PER_REGION) {
+                match tokio::time::timeout(STUN_REPLY_TIMEOUT, prober.measure(*target)).await {
+                    Ok(Ok((rtt, _mapped))) => {
+                        if best.is_none_or(|(fastest, _)| rtt < fastest) {
+                            best = Some((rtt, *target));
+                        }
+                    }
+                    Ok(Err(e)) => tracing::debug!(region_id = %id, %target, error = %e, "stun probe"),
+                    Err(_) => tracing::debug!(region_id = %id, %target, "stun probe timed out"),
+                }
+            }
+
+            best.map(|(latency, connected_remote)| RegionResult {
+                latency,
+                id,
+                latency_map_key: format!("{id}-v4"),
+                connected_remote,
+            })
+        });
+    }
+
+    let mut out = Vec::with_capacity(joinset.len());
+    while let Some(ret) = joinset.join_next().await {
+        match ret {
+            Ok(Some(result)) => out.push(result),
+            Ok(None) => {}
+            Err(e) => tracing::error!(error = %e, "failed to join"),
+        }
+    }
+
+    out.sort();
+    out
+}
+
+/// Measure regions over HTTPS: a TLS connection and a latency-check request each.
+async fn measure_derp_map_https(map: &DerpMap, config: &Config) -> Vec<RegionResult> {
     let mut joinset = tokio::task::JoinSet::new();
 
     // How many regions may be probed at once. Each probe is a TCP connection
@@ -212,17 +346,6 @@ pub async fn measure_derp_map(map: &DerpMap, config: &Config) -> Vec<RegionResul
     }
 
     out.sort();
-
-    match out.first() {
-        Some(best) => tracing::info!(
-            region_id = %best.id,
-            latency = ?best.latency,
-            measured = out.len(),
-            "derp latency measured; home region chosen"
-        ),
-        None => tracing::warn!("derp latency measurement produced no results"),
-    }
-
     out
 }
 

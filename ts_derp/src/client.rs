@@ -34,7 +34,12 @@ pub struct Client<Io> {
 pub async fn connect<'c>(
     region: impl IntoIterator<Item = &'c ServerConnInfo>,
 ) -> Result<Option<DefaultIo>, Error> {
-    let Some((conn, _, addr)) = crate::dial::dial_region_tls(region).await.unwrap() else {
+    // Not unwrap: a failed TLS handshake is routine (on an ESP32 the handshake
+    // can outlast the server's timeout), and firmware builds abort on panic.
+    let dialed = crate::dial::dial_region_tls(region)
+        .await
+        .map_err(|e| Error::IoFailure(std::io::Error::other(e)))?;
+    let Some((conn, _, addr)) = dialed else {
         return Ok(None);
     };
 

@@ -61,9 +61,18 @@ where
 
     let connector = TlsConnector::from(Arc::new(rustls_config));
 
-    let stream = connector.connect(server_name.to_owned(), io).await?;
+    // Worth seeing on slow targets. On an ESP32 the handshake is CPU-bound and
+    // holds the runtime's only worker while the certificate chain is verified,
+    // and servers drop handshakes that run too long (derper: 30 s).
+    let started = std::time::Instant::now();
+    let result = connector.connect(server_name.to_owned(), io).await;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    match &result {
+        Ok(_) => tracing::info!(server = ?server_name, elapsed_ms, "tls handshake complete"),
+        Err(e) => tracing::warn!(server = ?server_name, elapsed_ms, error = %e, kind = ?e.kind(), "tls handshake failed"),
+    }
 
-    Ok(stream)
+    result
 }
 
 /// If possible, converts the host portion of the given [`Url`] to a [`ServerName`] for establishing

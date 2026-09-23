@@ -82,7 +82,11 @@ impl StunProber {
         let (rx, _guard) = self.shared.send_stun(peer).await?;
         let sent = Instant::now();
 
-        let (resp, addr) = rx.await.unwrap();
+        // Not unwrap: the sender is only dropped unanswered if the receive task
+        // is gone, and firmware builds abort on panic.
+        let (resp, addr) = rx
+            .await
+            .map_err(|_| tokio::io::Error::other("stun receive task stopped"))?;
 
         Ok((resp.duration_since(sent), addr))
     }

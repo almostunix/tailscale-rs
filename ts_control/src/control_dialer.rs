@@ -136,6 +136,10 @@ impl ControlDialer {
     /// been attempted until [`TcpDialer::dial`] is called -- it is fine semantically to
     /// drop the returned dialer without calling `dial`.
     pub fn next_dialer(&mut self) -> impl TcpDialer + Debug {
+        self.next_candidate()
+    }
+
+    fn next_candidate(&mut self) -> ControlTcpDialer<'_> {
         match &self.plan {
             DialPlan::UseDns => ControlTcpDialer::UseDns,
             DialPlan::Plan(candidates) => {
@@ -190,18 +194,36 @@ impl ControlDialer {
         url: &Url,
         machine_keys: &ts_keys::MachineKeyPair,
     ) -> Result<Http2<BytesBody>, Error> {
-        let next = self.next_dialer();
-        tracing::trace!(selected_control_dialer = ?next);
-
         let host = url.host_str().ok_or(Error::InvalidUrl(url.clone()))?;
         let port = url
             .port_or_known_default()
             .ok_or_else(|| Error::InvalidUrl(url.clone()))?;
 
-        let conn = next.dial(host, port).await.map_err(|e| {
-            tracing::error!(error = %e, %url, %host, port, "dialing tcp");
-            Error::Internal(InternalErrorKind::Io, Operation::ConnectToControlServer)
-        })?;
+        let conn = loop {
+            let next = self.next_candidate();
+            tracing::trace!(selected_control_dialer = ?next);
+            let planned = format!("{next:?}");
+            let is_planned = matches!(next, ControlTcpDialer::Planned { .. });
+
+            match next.dial(host, port).await {
+                Ok(conn) => break conn,
+                // The dial plan control sends lists IPv6 addresses too. On a host
+                // with no IPv6 route -- an ESP32 on an IPv4-only network -- those
+                // fail locally, before a packet is sent, and each one used to cost
+                // a full reconnect backoff. Move straight on to the next candidate;
+                // the plan runs out into the DNS dialer, which ends the loop.
+                Err(e) if is_planned && is_unusable_locally(&e) => {
+                    tracing::debug!(error = %e, candidate = %planned, "control dial candidate unusable here, trying next");
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, %url, %host, port, candidate = %planned, "dialing tcp");
+                    return Err(Error::Internal(
+                        InternalErrorKind::Io,
+                        Operation::ConnectToControlServer,
+                    ));
+                }
+            }
+        };
 
         tracing::debug!(
             remote_endpoint = ?conn.peer_addr(),
@@ -212,6 +234,18 @@ impl ControlDialer {
 
         Ok(client)
     }
+}
+
+/// Whether a dial failed fast because the address cannot be reached from here
+/// (no route to it, address family unavailable) -- unlike a timeout or a
+/// refusal, which say something about the server rather than the path.
+fn is_unusable_locally(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::*;
+
+    matches!(
+        e.kind(),
+        HostUnreachable | NetworkUnreachable | AddrNotAvailable | Unsupported
+    )
 }
 
 /// Complete a connection to control over the supplied I/O `stream`.
