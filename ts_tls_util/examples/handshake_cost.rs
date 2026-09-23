@@ -3,17 +3,18 @@
 //!
 //! Network waits are excluded: only the synchronous rustls calls are timed, so the
 //! numbers approximate what a single tokio worker is blocked for on a slow CPU.
+//! Uses `ts_tls_util::client_config`, so connections after the first should
+//! resume the session and skip certificate verification.
 //!
 //! Usage: cargo run --release -p ts_tls_util --example handshake_cost -- [host] [n]
 
 use std::{
     io::{Read, Write},
     net::TcpStream,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
-use tokio_rustls::rustls::{ClientConfig, ClientConnection, RootCertStore, pki_types::ServerName};
+use tokio_rustls::rustls::{ClientConnection, Stream, pki_types::ServerName};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -22,21 +23,12 @@ fn main() {
 
     for i in 0..n {
         let t = Instant::now();
-        let roots = RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.into(),
-        };
-        let config = ClientConfig::builder_with_provider(Arc::new(
-            oxitls_rustcrypto_provider::provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+        let config = ts_tls_util::client_config(vec![]);
         let t_config = t.elapsed();
 
         let t = Instant::now();
         let mut conn =
-            ClientConnection::new(Arc::new(config), ServerName::try_from(host.clone()).unwrap())
+            ClientConnection::new(config, ServerName::try_from(host.clone()).unwrap())
                 .unwrap();
         let t_hello = t.elapsed();
 
@@ -64,9 +56,18 @@ fn main() {
             conn.write_tls(&mut sock).unwrap();
         }
         sock.flush().unwrap();
+        let kind = conn.handshake_kind();
+
+        // Read a response so the server's post-handshake session tickets are
+        // processed; without them there is nothing to resume next time.
+        let request = format!("HEAD / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        let mut tls = Stream::new(&mut conn, &mut sock);
+        tls.write_all(request.as_bytes()).unwrap();
+        let _ = tls.read_to_end(&mut Vec::new());
 
         println!(
-            "#{i} {host}: {:?} {:?}  config {:>9.3?}  client_hello {:>9.3?}  process {:>9.3?}  cpu total {:>9.3?}",
+            "#{i} {host}: {:?} {:?} {:?}  config {:>9.3?}  client_hello {:>9.3?}  process {:>9.3?}  cpu total {:>9.3?}",
+            kind.unwrap(),
             conn.protocol_version().unwrap(),
             conn.negotiated_cipher_suite().unwrap().suite(),
             t_config,

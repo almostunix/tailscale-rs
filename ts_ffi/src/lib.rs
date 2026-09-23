@@ -104,7 +104,7 @@ static TOKIO_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     // been measured yet and may be deeper; check uxTaskGetStackHighWaterMark.
     #[cfg(target_os = "espidf")]
     {
-        builder.thread_stack_size(64 * 1024);
+        builder.thread_stack_size(WORKER_STACK_BYTES);
         builder.max_blocking_threads(2);
     }
 
@@ -115,8 +115,39 @@ static TOKIO_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 
     tracing::info!("started tokio runtime");
 
+    #[cfg(target_os = "espidf")]
+    rt.spawn(watch_worker_stack());
+
     rt
 });
+
+#[cfg(target_os = "espidf")]
+const WORKER_STACK_BYTES: usize = 64 * 1024;
+
+/// Log the tokio worker's stack low-water mark each time it reaches a new low.
+///
+/// WORKER_STACK_BYTES was sized at ~2.2x one measured poll, before the TLS
+/// handshake or a full netmap had run on target. With one worker, this task
+/// runs on the same thread as everything else, so the FreeRTOS high-water mark
+/// it reads covers every code path that has run so far.
+#[cfg(target_os = "espidf")]
+async fn watch_worker_stack() {
+    unsafe extern "C" {
+        /// FreeRTOS; null means the calling task. In bytes on ESP-IDF.
+        fn uxTaskGetStackHighWaterMark(task: *mut core::ffi::c_void) -> u32;
+    }
+
+    let mut lowest = u32::MAX;
+    loop {
+        // SAFETY: a null handle asks about the calling task, which exists.
+        let never_used = unsafe { uxTaskGetStackHighWaterMark(core::ptr::null_mut()) };
+        if never_used < lowest {
+            lowest = never_used;
+            tracing::info!(never_used, of = WORKER_STACK_BYTES, "tokio worker stack low-water mark");
+        }
+        tokio::time::sleep(core::time::Duration::from_secs(10)).await;
+    }
+}
 
 /// A Tailscale device, also variously called a "node" or "peer".
 ///
