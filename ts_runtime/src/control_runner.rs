@@ -87,7 +87,10 @@ where
             Ok(Some(item)) => Some((item, stream)),
             Ok(None) => None,
             Err(_) => {
-                tracing::error!(?idle, "no control update or keepalive; treating connection as dead");
+                tracing::error!(
+                    ?idle,
+                    "no control update or keepalive; treating connection as dead"
+                );
                 None
             }
         }
@@ -691,7 +694,11 @@ impl Message<ControlLost> for ControlRunner {
 
     async fn handle(&mut self, msg: ControlLost, ctx: &mut Context<Self, Self::Reply>) {
         let failures = self.params.failures.fetch_add(1, Ordering::Relaxed) + 1;
-        tracing::error!(reason = msg.0, failures, "lost control connection; restarting");
+        tracing::error!(
+            reason = msg.0,
+            failures,
+            "lost control connection; restarting"
+        );
         ctx.stop();
     }
 }
@@ -766,8 +773,14 @@ mod reconnect_tests {
             restarts.push(t);
         }
         for (i, start) in restarts.iter().enumerate() {
-            let in_window = restarts[i..].iter().filter(|r| **r - *start < Duration::from_secs(5)).count();
-            assert!(in_window < 5, "{in_window} restarts within 5s starting at {start:?}");
+            let in_window = restarts[i..]
+                .iter()
+                .filter(|r| **r - *start < Duration::from_secs(5))
+                .count();
+            assert!(
+                in_window < 5,
+                "{in_window} restarts within 5s starting at {start:?}"
+            );
         }
     }
 }

@@ -60,7 +60,9 @@ where
             let kind = stream.get_ref().1.handshake_kind();
             tracing::info!(server = ?server_name, elapsed_ms, ?kind, "tls handshake complete")
         }
-        Err(e) => tracing::warn!(server = ?server_name, elapsed_ms, error = %e, kind = ?e.kind(), "tls handshake failed"),
+        Err(e) => {
+            tracing::warn!(server = ?server_name, elapsed_ms, error = %e, kind = ?e.kind(), "tls handshake failed")
+        }
     }
 
     result
@@ -139,7 +141,13 @@ mod mbedtls {
         ) -> i32;
     }
 
-    fn verify(curve_bits: u32, hash_bits: u32, public_key: &[u8], message: &[u8], signature: &[u8]) -> Outcome {
+    fn verify(
+        curve_bits: u32,
+        hash_bits: u32,
+        public_key: &[u8],
+        message: &[u8],
+        signature: &[u8],
+    ) -> Outcome {
         // SAFETY: each pointer/length pair describes a live slice, which the
         // callee only reads during the call.
         let rc = unsafe {
@@ -163,23 +171,26 @@ mod mbedtls {
 
     /// The provider's algorithms with ECDSA handed to mbedTLS, or `None` --
     /// keep RustCrypto for everything -- if mbedTLS fails the self-test.
-    pub(crate) static ALGORITHMS: LazyLock<Option<WebPkiSupportedAlgorithms>> = LazyLock::new(|| {
-        let started = std::time::Instant::now();
-        match ecdsa_offload::self_test(verify) {
-            Ok(()) => {
-                tracing::info!(
-                    self_test_ms = started.elapsed().as_millis() as u64,
-                    "ecdsa certificate checks handed to mbedtls"
-                );
-                let base = oxitls_rustcrypto_provider::provider().signature_verification_algorithms;
-                Some(ecdsa_offload::offload_ecdsa(&base, verify))
+    pub(crate) static ALGORITHMS: LazyLock<Option<WebPkiSupportedAlgorithms>> = LazyLock::new(
+        || {
+            let started = std::time::Instant::now();
+            match ecdsa_offload::self_test(verify) {
+                Ok(()) => {
+                    tracing::info!(
+                        self_test_ms = started.elapsed().as_millis() as u64,
+                        "ecdsa certificate checks handed to mbedtls"
+                    );
+                    let base =
+                        oxitls_rustcrypto_provider::provider().signature_verification_algorithms;
+                    Some(ecdsa_offload::offload_ecdsa(&base, verify))
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "mbedtls ecdsa self-test failed; certificate checks stay on rustcrypto");
+                    None
+                }
             }
-            Err(e) => {
-                tracing::error!(error = %e, "mbedtls ecdsa self-test failed; certificate checks stay on rustcrypto");
-                None
-            }
-        }
-    });
+        },
+    );
 }
 
 /// If possible, converts the host portion of the given [`Url`] to a [`ServerName`] for establishing

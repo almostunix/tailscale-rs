@@ -510,7 +510,9 @@ mod tests {
             let pkt = a_handshake.initiate(&mut a_state, &a_peer, Instant::now());
             let rx = ReceivedHandshake::new(pkt, &b_static, &b_mac_recv).expect("parse");
             assert!(
-                b_handshake.respond(rx, &mut b_state, &b_peer, Instant::now()).is_some(),
+                b_handshake
+                    .respond(rx, &mut b_state, &b_peer, Instant::now())
+                    .is_some(),
                 "initiation {attempt} carries a newer timestamp and must be answered"
             );
             std::thread::sleep(core::time::Duration::from_millis(5));

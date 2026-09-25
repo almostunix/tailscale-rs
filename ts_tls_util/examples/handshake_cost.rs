@@ -18,7 +18,9 @@ use tokio_rustls::rustls::{ClientConnection, Stream, pki_types::ServerName};
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let host = args.next().unwrap_or_else(|| "controlplane.tailscale.com".to_owned());
+    let host = args
+        .next()
+        .unwrap_or_else(|| "controlplane.tailscale.com".to_owned());
     let n: usize = args.next().map(|s| s.parse().unwrap()).unwrap_or(5);
 
     for i in 0..n {
@@ -28,8 +30,7 @@ fn main() {
 
         let t = Instant::now();
         let mut conn =
-            ClientConnection::new(config, ServerName::try_from(host.clone()).unwrap())
-                .unwrap();
+            ClientConnection::new(config, ServerName::try_from(host.clone()).unwrap()).unwrap();
         let t_hello = t.elapsed();
 
         let mut sock = TcpStream::connect((host.as_str(), 443)).unwrap();
@@ -63,7 +64,7 @@ fn main() {
         let request = format!("HEAD / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
         let mut tls = Stream::new(&mut conn, &mut sock);
         tls.write_all(request.as_bytes()).unwrap();
-        let _ = tls.read_to_end(&mut Vec::new());
+        tls.read_to_end(&mut Vec::new()).ok();
 
         println!(
             "#{i} {host}: {:?} {:?} {:?}  config {:>9.3?}  client_hello {:>9.3?}  process {:>9.3?}  cpu total {:>9.3?}",

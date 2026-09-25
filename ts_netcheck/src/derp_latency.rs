@@ -171,7 +171,9 @@ async fn measure_derp_map_stun(map: &DerpMap) -> Vec<RegionResult> {
                             best = Some((rtt, *target));
                         }
                     }
-                    Ok(Err(e)) => tracing::debug!(region_id = %id, %target, error = %e, "stun probe"),
+                    Ok(Err(e)) => {
+                        tracing::debug!(region_id = %id, %target, error = %e, "stun probe")
+                    }
                     Err(_) => tracing::debug!(region_id = %id, %target, "stun probe timed out"),
                 }
             }
@@ -222,10 +224,11 @@ async fn measure_derp_map_https(map: &DerpMap, config: &Config) -> Vec<RegionRes
     // Native builds leave concurrency unbounded, but can impose the ESP-IDF
     // cap for testing: TS_TEST_DERP_PROBE_CONCURRENCY=N.
     #[cfg(not(target_os = "espidf"))]
-    let permits: Option<Arc<tokio::sync::Semaphore>> = std::env::var("TS_TEST_DERP_PROBE_CONCURRENCY")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .map(|n| Arc::new(tokio::sync::Semaphore::new(n.max(1))));
+    let permits: Option<Arc<tokio::sync::Semaphore>> =
+        std::env::var("TS_TEST_DERP_PROBE_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map(|n| Arc::new(tokio::sync::Semaphore::new(n.max(1))));
 
     for (&id, region) in map {
         if region.info.no_measure_no_home {
@@ -258,21 +261,28 @@ async fn measure_derp_map_https(map: &DerpMap, config: &Config) -> Vec<RegionRes
             {
                 tracing::warn!(region_id = %id, "TEST HOOK: latency probe will hang");
                 let hang = core::future::pending::<Option<(Duration, SocketAddr)>>();
-                let sample_info = tokio::time::timeout(PROBE_TIMEOUT, hang).await.ok().flatten();
+                let sample_info = tokio::time::timeout(PROBE_TIMEOUT, hang)
+                    .await
+                    .ok()
+                    .flatten();
                 if sample_info.is_none() {
                     tracing::warn!(region_id = %id, "latency probe timed out");
                 }
                 return Result::<_, crate::https::Error>::Ok((id, latency_map_key, sample_info));
             }
 
-            let sample_info =
-                match tokio::time::timeout(PROBE_TIMEOUT, crate::measure_https_latency(&servers, config)).await {
-                    Ok(result) => result.map(|(dur, _info, addr)| (dur, addr)),
-                    Err(_) => {
-                        tracing::warn!(region_id = %id, "latency probe timed out");
-                        None
-                    }
-                };
+            let sample_info = match tokio::time::timeout(
+                PROBE_TIMEOUT,
+                crate::measure_https_latency(&servers, config),
+            )
+            .await
+            {
+                Ok(result) => result.map(|(dur, _info, addr)| (dur, addr)),
+                Err(_) => {
+                    tracing::warn!(region_id = %id, "latency probe timed out");
+                    None
+                }
+            };
 
             Result::<_, crate::https::Error>::Ok((id, latency_map_key, sample_info))
         });
