@@ -165,7 +165,9 @@ impl ControlDialer {
                         continue;
                     }
 
-                    if selected_candidate.is_none_or(|(prio, _idx, elem)| prio < elem.priority) {
+                    if selected_candidate
+                        .is_none_or(|(best, _idx, _elem)| best < candidate.priority)
+                    {
                         selected_candidate = Some((candidate.priority, i, candidate));
                     }
                 }
@@ -354,7 +356,35 @@ fn control_key_cache(url: &Url, op: KeyCacheOp) -> Option<ts_keys::MachinePublic
 
 #[cfg(test)]
 mod tests {
+    use core::{
+        net::{IpAddr, Ipv4Addr},
+        time::Duration,
+    };
+
     use super::*;
+
+    fn candidate(priority: usize, last_octet: u8) -> DialCandidate {
+        DialCandidate {
+            priority,
+            start_delay_sec: Duration::ZERO,
+            timeout: Duration::from_secs(10),
+            mode: DialMode::Ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, last_octet))),
+        }
+    }
+
+    #[test]
+    fn highest_priority_candidate_is_dialed_first() {
+        let mut dialer = ControlDialer::default();
+        dialer.update_dial_plan(&DialPlan::Plan(vec![
+            candidate(1, 1),
+            candidate(5, 5),
+            candidate(3, 3),
+        ]));
+        assert_eq!(
+            format!("{:?}", dialer.next_candidate()),
+            "TcpDialer::Ip(10.0.0.5)"
+        );
+    }
 
     #[test]
     fn control_key_cache_is_per_url_and_forgets() {
