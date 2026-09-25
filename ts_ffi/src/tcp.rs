@@ -132,6 +132,24 @@ pub extern "C" fn ts_tcp_remote_addr(stream: &tcp_stream) -> crate::sockaddr {
     stream.0.remote_addr().into()
 }
 
+/// Stop sending on `stream`: the remote sees end-of-stream once queued data is delivered.
+///
+/// Receiving continues until the remote closes its end, at which point a `ts_tcp_recv` blocked
+/// on another thread returns 0. Unlike `ts_tcp_close` this does not free `stream`, so it is safe
+/// while other threads are inside `ts_tcp_recv` / `ts_tcp_send`. Never blocks.
+///
+/// Returns 0 on success, or a negative number if the netstack has gone away.
+#[unsafe(no_mangle)]
+pub extern "C" fn ts_tcp_shutdown(stream: &tcp_stream) -> ffi::c_int {
+    match stream.0.shutdown() {
+        Ok(()) => 0,
+        Err(e) => {
+            tracing::error!(err = %e, "tcp shutdown");
+            -1
+        }
+    }
+}
+
 /// Close the specified socket.
 #[unsafe(no_mangle)]
 pub extern "C" fn ts_tcp_close(sock: Box<tcp_stream>) {

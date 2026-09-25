@@ -58,6 +58,11 @@ pub enum Command {
         buf: Bytes,
     },
 
+    /// Stop sending: queue a FIN behind any data already buffered, and keep receiving until
+    /// the remote closes its end. The socket stays allocated; [`Command::Close`] still
+    /// releases it.
+    Shutdown,
+
     /// Close this connection.
     ///
     /// This message causes the connection to enter the closing state, but responds
@@ -79,6 +84,7 @@ impl Debug for Command {
                 .finish(),
             Self::Recv { max_len } => f.debug_struct("Recv").field("max_len", max_len).finish(),
             Self::Send { buf } => f.debug_struct("Send").field("buf_len", &buf.len()).finish(),
+            Self::Shutdown => f.write_str("Shutdown"),
             Self::Close => f.write_str("Close"),
         }
     }

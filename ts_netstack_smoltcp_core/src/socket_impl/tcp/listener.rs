@@ -1,4 +1,4 @@
-use alloc::{collections::VecDeque, vec};
+use alloc::collections::VecDeque;
 use core::net::SocketAddr;
 
 use smoltcp::{iface::SocketHandle, socket::tcp};
@@ -61,7 +61,7 @@ impl Netstack {
 
         match cmd {
             TcpListenCommand::Listen { local_endpoint } => {
-                let mut listener = tcp::Socket::new(self.tcp_buffer(), self.tcp_buffer());
+                let mut listener = super::new_tcp_socket(&self.config);
 
                 if let Err(e) = listener.listen(local_endpoint) {
                     return Response::Error(e.into());
@@ -277,10 +277,7 @@ impl Netstack {
             // fallthrough: socket has either closed or been established -- create a new listen
             // socket
 
-            let mut new_listener = tcp::Socket::new(
-                tcp::SocketBuffer::new(vec![0; self.config.tcp_buffer_size]),
-                tcp::SocketBuffer::new(vec![0; self.config.tcp_buffer_size]),
-            );
+            let mut new_listener = super::new_tcp_socket(&self.config);
 
             if let Err(e) = new_listener.listen(listener.local_endpoint) {
                 // invariant failure: the only variants for ListenError are

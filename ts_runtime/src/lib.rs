@@ -55,6 +55,14 @@ pub struct Config {
     pub keys: ts_keys::NodeState,
 }
 
+/// Per-direction buffer for each tailnet TCP socket, and for the spare socket every listener
+/// keeps. On ESP-IDF it comes out of ~2 MB of PSRAM, and 16 KiB still allows ~200 KB/s at DERP's
+/// round-trip time.
+#[cfg(target_os = "espidf")]
+const TCP_BUFFER_SIZE: usize = 16 * 1024;
+#[cfg(not(target_os = "espidf"))]
+const TCP_BUFFER_SIZE: usize = 64 * 1024;
+
 impl kameo::Actor for Runtime {
     type Error = Error;
     type Args = Config;
@@ -116,8 +124,12 @@ impl kameo::Actor for Runtime {
             (
                 env.clone(),
                 netstack::netcore::Config {
-                    tcp_buffer_size: 64 * 1024,
+                    tcp_buffer_size: TCP_BUFFER_SIZE,
                     command_channel_capacity: Some(128),
+                    // A peer that vanishes (a phone leaving coverage) sends no FIN or RST; without
+                    // these its connection, and every thread blocked on it, is held forever.
+                    tcp_keep_alive: Some(core::time::Duration::from_secs(30)),
+                    tcp_timeout: Some(core::time::Duration::from_secs(120)),
                     ..Default::default()
                 },
                 netstack_id,

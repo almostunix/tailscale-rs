@@ -20,6 +20,15 @@ pub struct Config {
     /// The default size of buffer allocated for each TCP socket created.
     pub tcp_buffer_size: usize,
 
+    /// Keep-alive interval for TCP sockets: an idle connection probes its peer this often.
+    /// `None` sends no probes.
+    pub tcp_keep_alive: Option<core::time::Duration>,
+
+    /// Abort a TCP connection whose peer has sent nothing for this long while data or a
+    /// keep-alive probe is outstanding. `None` waits forever, so a peer that vanishes without
+    /// a FIN or RST holds the socket, and anything blocked on it, indefinitely.
+    pub tcp_timeout: Option<core::time::Duration>,
+
     /// The default size of buffer allocated for each raw socket.
     pub raw_buffer_size: usize,
     /// The default number of pending messages supported for each raw socket.
@@ -39,6 +48,8 @@ impl Default for Config {
             udp_message_count: 32,
 
             tcp_buffer_size: 1024 * 16,
+            tcp_keep_alive: None,
+            tcp_timeout: None,
 
             raw_buffer_size: 1024 * 4,
             raw_message_count: 32,

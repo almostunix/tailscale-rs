@@ -38,6 +38,7 @@ pub use net_types::{
 pub use tcp::{
     tcp_listener, tcp_stream, ts_tcp_close, ts_tcp_close_listener, ts_tcp_connect, ts_tcp_listen,
     ts_tcp_listener_local_addr, ts_tcp_local_addr, ts_tcp_recv, ts_tcp_remote_addr, ts_tcp_send,
+    ts_tcp_shutdown,
 };
 pub use udp::{ts_udp_bind, ts_udp_close, ts_udp_recvfrom, ts_udp_sendto, udp_socket};
 
@@ -143,7 +144,11 @@ async fn watch_worker_stack() {
         let never_used = unsafe { uxTaskGetStackHighWaterMark(core::ptr::null_mut()) };
         if never_used < lowest {
             lowest = never_used;
-            tracing::info!(never_used, of = WORKER_STACK_BYTES, "tokio worker stack low-water mark");
+            tracing::info!(
+                never_used,
+                of = WORKER_STACK_BYTES,
+                "tokio worker stack low-water mark"
+            );
         }
         tokio::time::sleep(core::time::Duration::from_secs(10)).await;
     }
@@ -304,7 +309,10 @@ where
             Err(tailscale::Error::Internal(tailscale::InternalErrorKind::Actor))
             | Err(tailscale::Error::Timeout) => {
                 if waited == 0 {
-                    tracing::warn!(what, "control connection restarting; still waiting for address");
+                    tracing::warn!(
+                        what,
+                        "control connection restarting; still waiting for address"
+                    );
                 }
                 waited = waited.saturating_add(1);
                 std::thread::sleep(core::time::Duration::from_secs(1));

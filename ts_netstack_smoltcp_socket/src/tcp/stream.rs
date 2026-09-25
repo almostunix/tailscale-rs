@@ -72,6 +72,15 @@ impl TcpStream {
         self.remote
     }
 
+    /// Stop sending: the remote sees end-of-stream after the data already queued. Receiving
+    /// continues until the remote closes its end, so a blocked [`Self::recv_blocking`] then
+    /// returns 0. Dropping the stream still releases it. Never blocks.
+    pub fn shutdown(&self) -> Result<(), netcore::Error> {
+        self.sender
+            .request_nonblocking(Some(self.handle), tcp::stream::Command::Shutdown)
+            .map_err(Into::into)
+    }
+
     /// Send bytes to the remote.
     ///
     /// Blocks until at least one byte can be queued. The return value is the number of

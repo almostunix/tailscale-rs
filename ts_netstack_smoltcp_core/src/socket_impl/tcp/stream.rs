@@ -37,7 +37,7 @@ impl Netstack {
                     );
                 }
 
-                let mut sock = tcp::Socket::new(self.tcp_buffer(), self.tcp_buffer());
+                let mut sock = super::new_tcp_socket(&self.config);
 
                 if let Err(e) = sock.connect(self.iface.context(), remote_endpoint, local_endpoint)
                 {
@@ -98,6 +98,14 @@ impl Netstack {
                         Response::Error(Error::invalid_socket_state())
                     }
                 }
+            }
+
+            TcpStreamCommand::Shutdown => {
+                // Not added to pending_tcp_closes: the handle stays valid until Close.
+                let sock = self.socket_set.get_mut::<tcp::Socket>(handle.unwrap());
+                sock.close();
+
+                Response::Ok
             }
 
             TcpStreamCommand::Close => {
