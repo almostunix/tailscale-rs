@@ -229,7 +229,9 @@ struct Runner {
 }
 
 impl Runner {
-    const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(10);
+    /// Go's derpInactiveCleanupTime. At 10 s, traffic to a peer homed elsewhere redialed this
+    /// region (TCP, TLS, DERP handshake) for nearly every burst.
+    const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
 
     #[tracing::instrument(skip_all, fields(region_id = %self.region_id))]
     async fn run(&mut self) -> Result<(), ts_derp::Error> {
