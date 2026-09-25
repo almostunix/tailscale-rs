@@ -1,5 +1,8 @@
 use core::fmt::{Debug, Formatter};
-use std::time::Instant;
+use std::{
+    sync::{Mutex, PoisonError},
+    time::Instant,
+};
 
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -280,7 +283,11 @@ where
             return Err(Error::InvalidUrl(url.clone()));
         }
     };
-    let control_public_key = crate::client::fetch_control_key(url).await?;
+    let cached_key = control_key_cache(url, KeyCacheOp::Get);
+    let control_public_key = match cached_key {
+        Some(key) => key,
+        None => crate::client::fetch_control_key(url).await?,
+    };
 
     let (handshake, init_msg) = ts_control_noise::Handshake::initialize(
         &crate::client::CONTROL_PROTOCOL_VERSION,
@@ -289,12 +296,77 @@ where
         CapabilityVersion::CURRENT,
     );
 
-    let conn =
-        crate::client::upgrade_ts2021(url, &init_msg, handshake, machine_keys, h1_client).await?;
-    let conn = crate::client::read_challenge_packet(conn).await?;
+    let upgraded = async {
+        let conn =
+            crate::client::upgrade_ts2021(url, &init_msg, handshake, machine_keys, h1_client)
+                .await?;
+        let conn = crate::client::read_challenge_packet(conn).await?;
+        Ok::<_, Error>(ts_http_util::http2::connect(conn).await?)
+    }
+    .await;
 
-    let h2_conn = ts_http_util::http2::connect(conn).await?;
-    tracing::debug!("http2 connection to control established");
+    match &upgraded {
+        Ok(_) => {
+            control_key_cache(url, KeyCacheOp::Put(control_public_key));
+            tracing::debug!(
+                cached_key = cached_key.is_some(),
+                "http2 connection to control established"
+            );
+        }
+        // The server may have rotated its key: fetch it afresh next time.
+        Err(_) if cached_key.is_some() => {
+            control_key_cache(url, KeyCacheOp::Forget);
+        }
+        Err(_) => {}
+    }
 
-    Ok(h2_conn)
+    upgraded
+}
+
+enum KeyCacheOp {
+    Get,
+    Put(ts_keys::MachinePublicKey),
+    Forget,
+}
+
+/// Control servers' Noise public keys, by control URL, kept for the life of the process.
+///
+/// Fetching the key takes its own HTTPS connection, so without this every reconnect paid for
+/// two TLS handshakes -- ~1.9 s each on an ESP32. Go's client keeps the key the same way. It
+/// was fetched over a verified TLS connection, and a key that stops working is forgotten.
+fn control_key_cache(url: &Url, op: KeyCacheOp) -> Option<ts_keys::MachinePublicKey> {
+    static KEYS: Mutex<Vec<(String, ts_keys::MachinePublicKey)>> = Mutex::new(Vec::new());
+
+    let mut keys = KEYS.lock().unwrap_or_else(PoisonError::into_inner);
+    let at = keys.iter().position(|(u, _)| u == url.as_str());
+    match (op, at) {
+        (KeyCacheOp::Get, Some(i)) => return Some(keys[i].1),
+        (KeyCacheOp::Get, None) => {}
+        (KeyCacheOp::Put(key), Some(i)) => keys[i].1 = key,
+        (KeyCacheOp::Put(key), None) => keys.push((url.as_str().to_owned(), key)),
+        (KeyCacheOp::Forget, Some(i)) => {
+            keys.swap_remove(i);
+        }
+        (KeyCacheOp::Forget, None) => {}
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn control_key_cache_is_per_url_and_forgets() {
+        let url = Url::parse("https://control.test.invalid/").unwrap();
+        let other = Url::parse("https://other.test.invalid/").unwrap();
+        let key = ts_keys::MachineKeyPair::random().public;
+
+        assert!(control_key_cache(&url, KeyCacheOp::Get).is_none());
+        control_key_cache(&url, KeyCacheOp::Put(key));
+        assert!(control_key_cache(&url, KeyCacheOp::Get) == Some(key));
+        assert!(control_key_cache(&other, KeyCacheOp::Get).is_none());
+        control_key_cache(&url, KeyCacheOp::Forget);
+        assert!(control_key_cache(&url, KeyCacheOp::Get).is_none());
+    }
 }
