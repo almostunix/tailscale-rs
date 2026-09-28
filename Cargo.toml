@@ -173,19 +173,16 @@ invalid_html_tags = "deny"
 private_intra_doc_links = "deny"
 
 [profile.release]
-# Phase 2: this build gets linked into ESP32-S3 firmware, where the app
-# partition is 6.25MB and Meshtastic itself wants ~1MB of it. opt-level "z"
-# over "s", one codegen unit and panic=abort together cut 3.3MB of machine
-# code (44% of __text) out of the linked firmware -- far and away the largest
-# size lever found, dwarfing the aws-lc-rs -> rustls-rustcrypto swap.
-#
-# panic = "abort" is also the honest setting for a staticlib called from C++:
-# a Rust panic unwinding across the ts_ffi boundary is undefined behaviour
-# anyway, so aborting is strictly better than pretending to unwind.
-lto = "fat"
-opt-level = "z"
+lto = true
+opt-level = "s"
 split-debuginfo = "packed"
 strip = true
+
+# For ts_ffi linked into microcontroller firmware: smallest code, and no unwinding across the C ABI.
+[profile.firmware]
+inherits = "release"
+lto = "fat"
+opt-level = "z"
 codegen-units = 1
 panic = "abort"
 

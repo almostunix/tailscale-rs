@@ -14,18 +14,9 @@ rust-version.workspace = true
 [dependencies]
 # Unconditionally required dependencies.
 tokio.workspace = true
-# Phase 2: aws-lc-rs cannot build for Xtensa (C + hand-written asm with no
-# Xtensa support), so the backend has to be pure Rust. `tls12` is kept because
-# dropping it would be a protocol change, not just a crypto one.
+# Pure-Rust crypto: aws-lc-rs has no Xtensa (ESP32) build. `tls12` keeps the protocol set unchanged.
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
-# Defaults are ["std", "tls12", "zeroize"]. xtensa-esp32s3-espidf provides
-# std, so there is no reason to drop to the alloc-only path yet.
-#
-# Chosen over rustls-rustcrypto, which is the better-known crate but is still
-# 0.0.2-alpha and unpublished since 2024-04. Decisively, rustls-rustcrypto pins
-# rustls-webpki ^0.102 while this tree resolves 0.103.15, so it would link two
-# copies of the certificate parser into a firmware we are trying to shrink.
-# oxitls drops the webpki dependency entirely.
+# Over rustls-rustcrypto (alpha, and pins an older rustls-webpki, so two parsers would be linked).
 oxitls-rustcrypto-provider = "0.3.0"
 tracing.workspace = true
 url.workspace = true
