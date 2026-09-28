@@ -38,6 +38,7 @@ const ANYWHERE: u32 = MALLOC_CAP_8BIT;
 /// target (library/std/src/sys/alloc/mod.rs, MIN_ALIGN).
 const MIN_ALIGN: usize = 4;
 
+// ESP-IDF's heap API; cbindgen.toml keeps these out of tailscale.h.
 unsafe extern "C" {
     fn heap_caps_malloc(size: usize, caps: u32) -> *mut c_void;
     fn heap_caps_aligned_alloc(alignment: usize, size: usize, caps: u32) -> *mut c_void;

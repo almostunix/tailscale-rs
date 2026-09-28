@@ -17,6 +17,9 @@ include = [
     "sa_family",
 ]
 
+# ESP-IDF's heap API, declared in esp_alloc.rs for Rust's own use: the firmware has its own header.
+exclude = ["heap_caps_malloc", "heap_caps_aligned_alloc", "heap_caps_realloc", "heap_caps_free"]
+
 [export.rename]
 AF_INET = "TS_AF_INET"
 AF_INET6 = "TS_AF_INET6"
