@@ -264,6 +264,8 @@ workspace = true
 # listener.
 axum = ["dep:axum"]
 ssh = ["dep:russh", "dep:bytes", "dep:ratatui"]
+# Environment-variable fault injection (TS_TEST_*); off in release builds.
+test-hooks = ["ts_runtime/test-hooks"]
 
 [[example]]
 name = "axum"

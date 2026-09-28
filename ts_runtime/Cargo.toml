@@ -59,6 +59,8 @@ ts_capabilityversion.workspace = true
 
 [features]
 console = ["kameo/console"]
+# Environment-variable fault injection for testing reconnection and relay selection.
+test-hooks = ["ts_netcheck/test-hooks"]
 otel = ["kameo/otel", "kameo/tracing"]
 
 [lints]

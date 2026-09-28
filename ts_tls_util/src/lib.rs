@@ -58,7 +58,7 @@ where
     match &result {
         Ok(stream) => {
             let kind = stream.get_ref().1.handshake_kind();
-            tracing::info!(server = ?server_name, elapsed_ms, ?kind, "tls handshake complete")
+            tracing::debug!(server = ?server_name, elapsed_ms, ?kind, "tls handshake complete")
         }
         Err(e) => {
             tracing::warn!(server = ?server_name, elapsed_ms, error = %e, kind = ?e.kind(), "tls handshake failed")

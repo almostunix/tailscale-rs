@@ -99,11 +99,11 @@ where
 
 /// Fault injection for exercising reconnection against a real control server
 /// on demand, instead of waiting for a network to misbehave. Environment
-/// variables, read once; compiled out of ESP-IDF firmware entirely.
+/// variables, read only in builds with the `test-hooks` feature.
 ///
 /// - TS_TEST_FAIL_DIALS=N: the first N dial attempts fail immediately.
 /// - TS_TEST_STREAM_IDLE_SECS=N: use N seconds as the map stream idle timeout.
-#[cfg(not(target_os = "espidf"))]
+#[cfg(feature = "test-hooks")]
 mod test_hooks {
     use core::time::Duration;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -123,7 +123,7 @@ mod test_hooks {
     }
 }
 
-#[cfg(target_os = "espidf")]
+#[cfg(not(feature = "test-hooks"))]
 mod test_hooks {
     use core::time::Duration;
 

@@ -105,13 +105,17 @@ pub async fn measure_derp_map(map: &DerpMap, config: &Config) -> Vec<RegionResul
 /// exchange, where an HTTPS probe is a TCP connection plus a full TLS handshake
 /// per region -- milliseconds of CPU on a desktop, far more on an ESP32, and
 /// the map has ~30 regions. HTTPS stays as the fallback for networks that
-/// block UDP. Native builds keep HTTPS-first unless `TS_TEST_DERP_STUN=1`.
+/// block UDP. Native builds keep HTTPS-first unless built with `test-hooks` and
+/// run with `TS_TEST_DERP_STUN=1`.
 fn stun_first() -> bool {
     #[cfg(target_os = "espidf")]
     return true;
 
-    #[cfg(not(target_os = "espidf"))]
+    #[cfg(all(not(target_os = "espidf"), feature = "test-hooks"))]
     return std::env::var("TS_TEST_DERP_STUN").is_ok_and(|v| v == "1");
+
+    #[cfg(all(not(target_os = "espidf"), not(feature = "test-hooks")))]
+    return false;
 }
 
 fn log_home_region(out: &[RegionResult], method: &str) {
@@ -221,9 +225,11 @@ async fn measure_derp_map_https(map: &DerpMap, config: &Config) -> Vec<RegionRes
     // the deadline longer before the node is reachable at startup.
     #[cfg(target_os = "espidf")]
     let permits = Some(Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PROBES)));
-    // Native builds leave concurrency unbounded, but can impose the ESP-IDF
-    // cap for testing: TS_TEST_DERP_PROBE_CONCURRENCY=N.
-    #[cfg(not(target_os = "espidf"))]
+    // Native builds leave concurrency unbounded; with `test-hooks` they can impose
+    // the ESP-IDF cap for testing: TS_TEST_DERP_PROBE_CONCURRENCY=N.
+    #[cfg(all(not(target_os = "espidf"), not(feature = "test-hooks")))]
+    let permits: Option<Arc<tokio::sync::Semaphore>> = None;
+    #[cfg(all(not(target_os = "espidf"), feature = "test-hooks"))]
     let permits: Option<Arc<tokio::sync::Semaphore>> =
         std::env::var("TS_TEST_DERP_PROBE_CONCURRENCY")
             .ok()
@@ -250,11 +256,11 @@ async fn measure_derp_map_https(map: &DerpMap, config: &Config) -> Vec<RegionRes
             // Nothing below this has a timeout of its own: a region whose
             // servers accept the TCP connection but never answer would hold
             // this task -- and, on ESP-IDF, one of the few permits -- forever.
-            // Test hook, native only: TS_TEST_DERP_PROBE_HANG_REGIONS=1,2,3 makes
-            // those regions' probes never finish -- the suspected ESP32 failure,
-            // where stalled probes held every permit and no home region was
-            // ever chosen.
-            #[cfg(not(target_os = "espidf"))]
+            // Test hook (`test-hooks` feature): TS_TEST_DERP_PROBE_HANG_REGIONS=1,2,3
+            // makes those regions' probes never finish -- the suspected ESP32
+            // failure, where stalled probes held every permit and no home region
+            // was ever chosen.
+            #[cfg(feature = "test-hooks")]
             if std::env::var("TS_TEST_DERP_PROBE_HANG_REGIONS")
                 .map(|v| v.split(',').any(|r| r.trim() == id.to_string()))
                 .unwrap_or(false)

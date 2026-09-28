@@ -32,5 +32,9 @@ tracing-test.workspace = true
 ts_control_serde.workspace = true
 ts_test_util.workspace = true
 
+[features]
+# Environment-variable switches for testing relay selection; see derp_latency.rs.
+test-hooks = []
+
 [lints]
 workspace = true

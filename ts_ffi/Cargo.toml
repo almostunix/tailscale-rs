@@ -34,6 +34,12 @@ tokio = { workspace = true, features = [
 tracing = { workspace = true, features = ["release_max_level_info"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 
+[features]
+# TS_TEST_* fault injection, for native test runs; see ts_runtime and ts_netcheck.
+test-hooks = ["tailscale/test-hooks"]
+# ESP-IDF: log the tokio worker's stack low-water mark as it falls.
+diagnostics = []
+
 [dev-dependencies]
 ts_netstack_smoltcp = { workspace = true, features = ["tokio"] }
 ts_netstack_smoltcp_core.workspace = true

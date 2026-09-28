@@ -120,7 +120,7 @@ static TOKIO_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 
     tracing::info!("started tokio runtime");
 
-    #[cfg(target_os = "espidf")]
+    #[cfg(all(target_os = "espidf", feature = "diagnostics"))]
     rt.spawn(watch_worker_stack());
 
     rt
@@ -135,7 +135,7 @@ const WORKER_STACK_BYTES: usize = 64 * 1024;
 /// handshake or a full netmap had run on target. With one worker, this task
 /// runs on the same thread as everything else, so the FreeRTOS high-water mark
 /// it reads covers every code path that has run so far.
-#[cfg(target_os = "espidf")]
+#[cfg(all(target_os = "espidf", feature = "diagnostics"))]
 async fn watch_worker_stack() {
     unsafe extern "C" {
         /// FreeRTOS; null means the calling task. In bytes on ESP-IDF.
