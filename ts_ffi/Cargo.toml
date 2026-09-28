@@ -14,6 +14,7 @@ publish.workspace = true
 [dependencies]
 tailscale.workspace = true
 ts_keys.workspace = true
+ts_tls_util.workspace = true
 
 # Not "full": its `signal` feature does not build for ESP-IDF, and nothing here needs signals.
 tokio = { workspace = true, features = [

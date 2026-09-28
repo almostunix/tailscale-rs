@@ -206,6 +206,40 @@ pub extern "C" fn ts_init_tracing() {
     });
 }
 
+/// Verifies a DER ECDSA `signature` over `message` against a SEC1 `public_key`, on curve
+/// P-`curve_bits` with SHA-`hash_bits`. Returns 0 if it is valid, 1 if it is not, and anything
+/// else if it cannot tell. Nullable.
+pub type ecdsa_verify_fn = Option<
+    unsafe extern "C" fn(
+        curve_bits: u32,
+        hash_bits: u32,
+        public_key: *const u8,
+        public_key_len: usize,
+        message: *const u8,
+        message_len: usize,
+        signature: *const u8,
+        signature_len: usize,
+    ) -> ffi::c_int,
+>;
+
+/// Hand TLS certificate ECDSA checks to `verify`, such as a hardware-accelerated library.
+///
+/// `verify` is used only after it passes a known-answer self-test, and whatever it cannot decide
+/// falls back to the built-in verifier. Call it before `ts_init`. Returns 0, or -1 if `verify` is
+/// `NULL`, a verifier is already set, or a TLS connection has already been made.
+///
+/// # Safety
+///
+/// `verify` must be callable from any thread, and must only read its buffers, during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ts_set_ecdsa_verifier(verify: ecdsa_verify_fn) -> ffi::c_int {
+    match verify {
+        // SAFETY: the caller upholds set_ecdsa_verifier's contract.
+        Some(verify) if unsafe { ts_tls_util::set_ecdsa_verifier(verify) } => 0,
+        _ => -1,
+    }
+}
+
 /// Initialize a new Tailscale device.
 ///
 /// `config` is the configuration with which to initialize the device. You may pass `NULL`, and a

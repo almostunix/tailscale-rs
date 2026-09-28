@@ -10,12 +10,12 @@ use tokio_rustls::{
 pub use tokio_rustls::{client::TlsStream, rustls::pki_types::ServerName};
 use url::Url;
 
-// Used on ESP-IDF only; compiled natively so its tests run on the host.
-#[cfg(any(target_os = "espidf", test))]
 mod ecdsa_offload;
+mod external_ecdsa;
 #[cfg(feature = "insecure")]
 mod insecure;
 
+pub use external_ecdsa::{EcdsaVerifyFn, set_ecdsa_verifier};
 #[cfg(feature = "insecure")]
 pub use insecure::connect_insecure;
 
@@ -103,94 +103,14 @@ pub fn client_config(alpn: Vec<Vec<u8>>) -> Arc<ClientConfig> {
 /// Named explicitly rather than relying on rustls' process-wide default: with
 /// no backend feature enabled there is no default to fall back on, and
 /// `ClientConfig::builder()` would panic at run time instead of failing to
-/// compile. On ESP-IDF, ECDSA signature checks go to mbedTLS; see
-/// [`ecdsa_offload`].
+/// compile. ECDSA signature checks go to the verifier registered with
+/// [`set_ecdsa_verifier`], if any.
 fn provider() -> CryptoProvider {
-    #[allow(unused_mut)]
     let mut provider = oxitls_rustcrypto_provider::provider();
-
-    #[cfg(target_os = "espidf")]
-    if let Some(algorithms) = *mbedtls::ALGORITHMS {
+    if let Some(algorithms) = *external_ecdsa::ALGORITHMS {
         provider.signature_verification_algorithms = algorithms;
     }
-
     provider
-}
-
-#[cfg(target_os = "espidf")]
-mod mbedtls {
-    use std::sync::LazyLock;
-
-    use tokio_rustls::rustls::crypto::WebPkiSupportedAlgorithms;
-
-    use crate::ecdsa_offload::{self, Outcome};
-
-    unsafe extern "C" {
-        /// Supplied by the firmware that links ts_ffi; for Meshtastic,
-        /// src/mesh/api/TailscaleMbedtls.cpp. Returns 0 if the signature is
-        /// valid, 1 if it is not, anything else if it cannot tell.
-        fn ts_mbedtls_ecdsa_verify(
-            curve_bits: u32,
-            hash_bits: u32,
-            public_key: *const u8,
-            public_key_len: usize,
-            message: *const u8,
-            message_len: usize,
-            signature: *const u8,
-            signature_len: usize,
-        ) -> i32;
-    }
-
-    fn verify(
-        curve_bits: u32,
-        hash_bits: u32,
-        public_key: &[u8],
-        message: &[u8],
-        signature: &[u8],
-    ) -> Outcome {
-        // SAFETY: each pointer/length pair describes a live slice, which the
-        // callee only reads during the call.
-        let rc = unsafe {
-            ts_mbedtls_ecdsa_verify(
-                curve_bits,
-                hash_bits,
-                public_key.as_ptr(),
-                public_key.len(),
-                message.as_ptr(),
-                message.len(),
-                signature.as_ptr(),
-                signature.len(),
-            )
-        };
-        match rc {
-            0 => Outcome::Valid,
-            1 => Outcome::Invalid,
-            _ => Outcome::CannotCheck,
-        }
-    }
-
-    /// The provider's algorithms with ECDSA handed to mbedTLS, or `None` --
-    /// keep RustCrypto for everything -- if mbedTLS fails the self-test.
-    pub(crate) static ALGORITHMS: LazyLock<Option<WebPkiSupportedAlgorithms>> = LazyLock::new(
-        || {
-            let started = std::time::Instant::now();
-            match ecdsa_offload::self_test(verify) {
-                Ok(()) => {
-                    tracing::info!(
-                        self_test_ms = started.elapsed().as_millis() as u64,
-                        "ecdsa certificate checks handed to mbedtls"
-                    );
-                    let base =
-                        oxitls_rustcrypto_provider::provider().signature_verification_algorithms;
-                    Some(ecdsa_offload::offload_ecdsa(&base, verify))
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "mbedtls ecdsa self-test failed; certificate checks stay on rustcrypto");
-                    None
-                }
-            }
-        },
-    );
 }
 
 /// If possible, converts the host portion of the given [`Url`] to a [`ServerName`] for establishing

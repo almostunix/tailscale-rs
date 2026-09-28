@@ -239,6 +239,28 @@ pub(crate) fn self_test(backend: EcdsaBackend) -> Result<(), String> {
     Ok(())
 }
 
+/// A correct backend, built on the provider's own RustCrypto verifiers.
+#[cfg(test)]
+pub(crate) fn rustcrypto(
+    curve_bits: u32,
+    hash_bits: u32,
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Outcome {
+    let alg = oxitls_rustcrypto_provider::provider()
+        .signature_verification_algorithms
+        .all
+        .iter()
+        .copied()
+        .find(|&alg| ecdsa_params(alg) == Some((curve_bits, hash_bits)))
+        .unwrap();
+    match alg.verify_signature(public_key, message, signature) {
+        Ok(()) => Outcome::Valid,
+        Err(_) => Outcome::Invalid,
+    }
+}
+
 #[cfg(test)]
 mod test {
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -247,26 +269,6 @@ mod test {
 
     fn base() -> WebPkiSupportedAlgorithms {
         oxitls_rustcrypto_provider::provider().signature_verification_algorithms
-    }
-
-    /// A correct backend, built on the provider's own RustCrypto verifiers.
-    fn rustcrypto(
-        curve_bits: u32,
-        hash_bits: u32,
-        public_key: &[u8],
-        message: &[u8],
-        signature: &[u8],
-    ) -> Outcome {
-        let alg = base()
-            .all
-            .iter()
-            .copied()
-            .find(|&alg| ecdsa_params(alg) == Some((curve_bits, hash_bits)))
-            .unwrap();
-        match alg.verify_signature(public_key, message, signature) {
-            Ok(()) => Outcome::Valid,
-            Err(_) => Outcome::Invalid,
-        }
     }
 
     #[test]

@@ -6389,6 +6389,7 @@ dependencies = [
  "ts_netstack_smoltcp",
  "ts_netstack_smoltcp_core",
  "ts_netstack_smoltcp_socket",
+ "ts_tls_util",
 ]
 
 [[package]]
