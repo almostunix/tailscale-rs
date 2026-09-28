@@ -1,7 +1,7 @@
 > [!NOTE]
 > **Unofficial fork.** The `heltec-v4` branch adds an ESP-IDF (ESP32-S3) port and fixes, used by
-> [Meshtastic over Tailscale](https://github.com/almostunix/firmware/tree/tailscale-heltec-v4). It is not
-> affiliated with or endorsed by Tailscale Inc. Upstream: <https://github.com/tailscale/tailscale-rs>.
+> [a Meshtastic firmware branch that adds Tailscale](https://github.com/almostunix/firmware/tree/tailscale-heltec-v4).
+> It is not affiliated with or endorsed by Tailscale Inc. Upstream: <https://github.com/tailscale/tailscale-rs>.
 > Licensing is unchanged: BSD 3-Clause plus the patent grant in `PATENTS`. The commit messages on this
 > branch describe each change.
 
