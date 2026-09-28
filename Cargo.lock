@@ -6386,6 +6386,9 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ts_keys",
+ "ts_netstack_smoltcp",
+ "ts_netstack_smoltcp_core",
+ "ts_netstack_smoltcp_socket",
 ]
 
 [[package]]

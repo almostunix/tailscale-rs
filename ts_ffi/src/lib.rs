@@ -107,6 +107,10 @@ static TOKIO_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     {
         builder.thread_stack_size(WORKER_STACK_BYTES);
         builder.max_blocking_threads(2);
+        // Keep blocking-pool threads rather than retiring them after 10 s idle: every exiting
+        // thread leaks its std `Thread` handle on ESP-IDF (see `tcp::blocking`), and these are
+        // started for DNS on every DERP dial.
+        builder.thread_keep_alive(core::time::Duration::from_secs(24 * 60 * 60));
     }
 
     let rt = builder.build().expect(

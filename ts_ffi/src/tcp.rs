@@ -2,6 +2,18 @@ use std::ffi;
 
 use crate::TOKIO_RUNTIME;
 
+/// Run a netstack future to completion on the calling (embedder's) thread.
+///
+/// The netstack's `*_blocking` calls park through `std::thread::current()`, which gives each
+/// calling thread a `Thread` handle holding a pthread mutex and condvar. On ESP-IDF that handle
+/// is never freed when an embedder's thread exits: std drops it in a second round of TLS
+/// destructors, by which point ESP-IDF has already cleared the slot it lives in. A firmware that
+/// starts threads per connection lost ~350 bytes of internal RAM per thread. tokio's `block_on`
+/// parks through a thread-local with its own destructor, which ESP-IDF runs.
+fn blocking<F: core::future::Future>(fut: F) -> F::Output {
+    TOKIO_RUNTIME.block_on(fut)
+}
+
 /// A Tailscale TCP listener handle.
 pub struct tcp_listener(tailscale::netstack::TcpListener);
 
@@ -32,7 +44,8 @@ pub extern "C" fn ts_tcp_listen(
 /// Returns null if there was an error.
 #[unsafe(no_mangle)]
 pub extern "C" fn ts_tcp_accept(listener: &tcp_listener) -> Option<Box<tcp_stream>> {
-    match listener.0.accept_blocking() {
+    // block_on rather than the netstack's *_blocking calls throughout this file: see `blocking`.
+    match blocking(listener.0.accept()) {
         Ok(sock) => Some(Box::new(tcp_stream(sock))),
         Err(e) => {
             tracing::error!(err = %e, "tcp accept");
@@ -88,7 +101,7 @@ pub unsafe extern "C" fn ts_tcp_send(
     // SAFETY: ensured by function precondition
     let b = unsafe { core::slice::from_raw_parts(buf, len) };
 
-    match stream.0.send_blocking(b) {
+    match blocking(stream.0.send(b)) {
         Err(e) => {
             tracing::error!(err = %e, "tcp accept");
             -1
@@ -111,7 +124,7 @@ pub unsafe extern "C" fn ts_tcp_recv(stream: &tcp_stream, buf: *mut u8, len: usi
     // SAFETY: ensured by function precondition
     let b = unsafe { core::slice::from_raw_parts_mut(buf, len) };
 
-    match stream.0.recv_blocking(b) {
+    match blocking(stream.0.recv(b)) {
         Err(e) => {
             tracing::error!(err = %e, "tcp accept");
             -1
@@ -154,4 +167,66 @@ pub extern "C" fn ts_tcp_shutdown(stream: &tcp_stream) -> ffi::c_int {
 #[unsafe(no_mangle)]
 pub extern "C" fn ts_tcp_close(sock: Box<tcp_stream>) {
     drop(sock);
+}
+
+#[cfg(test)]
+mod tests {
+    use core::net::Ipv4Addr;
+    use std::sync::Arc;
+
+    use ts_netstack_smoltcp::{Netstack, WakingPipe, WakingPipeDev};
+    use ts_netstack_smoltcp_core::{self as netcore, HasChannel, NetstackControl};
+    use ts_netstack_smoltcp_socket::CreateSocket;
+
+    use super::*;
+
+    /// The embedder's shape: plain OS threads blocking in recv and send while the netstack runs on
+    /// the runtime's single worker.
+    #[test]
+    fn blocking_calls_work_from_plain_threads() {
+        let (a, b) = (
+            Ipv4Addr::new(192, 168, 40, 1),
+            Ipv4Addr::new(192, 168, 40, 2),
+        );
+        let (p1, p2) = WakingPipe::new(None);
+        let dev = |pipe| WakingPipeDev {
+            pipe,
+            mtu: 1500,
+            medium: netcore::smoltcp::phy::Medium::Ip,
+        };
+        let mut s1 = Netstack::new(dev(p1), Default::default());
+        let mut s2 = Netstack::new(dev(p2), Default::default());
+        let (c1, c2) = (s1.command_channel(), s2.command_channel());
+        TOKIO_RUNTIME.spawn(async move { s1.run_tokio().await });
+        TOKIO_RUNTIME.spawn(async move { s2.run_tokio().await });
+        blocking(c1.set_ips([a.into()])).unwrap();
+        blocking(c2.set_ips([b.into()])).unwrap();
+
+        let listener = blocking(c2.tcp_listen((b, 4403).into())).unwrap();
+        let client = blocking(c1.tcp_connect((a, 4403).into(), (b, 4403).into())).unwrap();
+        let server = Arc::new(blocking(listener.accept()).unwrap());
+
+        for round in 0..20 {
+            let reader = std::thread::spawn({
+                let server = server.clone();
+                move || {
+                    let mut buf = [0; 16];
+                    let n = blocking(server.recv(&mut buf)).unwrap();
+                    buf[..n].to_vec()
+                }
+            });
+            blocking(client.send(format!("ping {round}").as_bytes())).unwrap();
+            assert_eq!(reader.join().unwrap(), format!("ping {round}").as_bytes());
+
+            std::thread::spawn({
+                let server = server.clone();
+                move || blocking(server.send(b"pong")).unwrap()
+            })
+            .join()
+            .unwrap();
+            let mut buf = [0; 16];
+            let n = blocking(client.recv(&mut buf)).unwrap();
+            assert_eq!(&buf[..n], b"pong");
+        }
+    }
 }

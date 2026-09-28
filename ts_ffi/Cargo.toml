@@ -34,6 +34,11 @@ tokio = { workspace = true, features = [
 tracing = { workspace = true, features = ["release_max_level_info"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 
+[dev-dependencies]
+ts_netstack_smoltcp = { workspace = true, features = ["tokio"] }
+ts_netstack_smoltcp_core.workspace = true
+ts_netstack_smoltcp_socket = { workspace = true, features = ["tokio"] }
+
 [build-dependencies]
 cbindgen = "0.29"
 
