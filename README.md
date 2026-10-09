@@ -7,7 +7,7 @@
 The `heltec-v4` branch ports tailscale-rs to ESP-IDF (ESP32-S3), with the fixes that port needed. It is
 used by [a Meshtastic firmware branch](https://github.com/almostunix/firmware/tree/tailscale-heltec-v4)
 that serves the Meshtastic phone API on a tailnet; to set up a node, start with its
-[quick start](https://github.com/almostunix/firmware/blob/tailscale-heltec-v4/TAILSCALE-QUICKSTART.md).
+[quick start](https://github.com/almostunix/firmware/blob/tailscale-heltec-v4/tailscale/QUICKSTART.md).
 
 **What the branch adds**
 
