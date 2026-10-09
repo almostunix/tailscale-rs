@@ -1,0 +1,16 @@
+# Embedded source paths (panic locations, tracing) as before the crates/ regroup: saves ~5 KB of flash.
+# rustc applies the last matching prefix, so specific ones come last.
+[target.xtensa-esp32s3-espidf]
+rustflags = [
+  "--remap-path-prefix=crates=",
+  "--remap-path-prefix=crates/net=",
+  "--remap-path-prefix=crates/bindings=",
+  "--remap-path-prefix=crates/capabilities=",
+  "--remap-path-prefix=crates/control_plane=",
+  "--remap-path-prefix=crates/data_structures=",
+  "--remap-path-prefix=crates/kv_store=",
+  "--remap-path-prefix=crates/net/overlay=",
+  "--remap-path-prefix=crates/net/protocol=",
+  "--remap-path-prefix=crates/net/underlay=",
+  "--remap-path-prefix=crates/utils=",
+]
