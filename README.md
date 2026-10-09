@@ -27,8 +27,12 @@ RUSTUP_TOOLCHAIN=esp cargo build -p ts_ffi --profile firmware \
   --target xtensa-esp32s3-espidf -Zbuild-std=std,panic_abort
 ```
 
-**Status:** tested on a Heltec WiFi LoRa 32 V4. Releases are tagged `heltec-v4-vX.Y`, and the crates
-follow upstream's `crates/` layout. Licensing is unchanged: BSD 3-Clause plus the patent grant in
+The library lands in `target/xtensa-esp32s3-espidf/firmware/libtailscalers.a`, and its header is
+`crates/bindings/ts_ffi/tailscale.h`.
+
+**Status:** tested on a Heltec WiFi LoRa 32 V4.
+[Releases](https://github.com/almostunix/tailscale-rs/releases) are tagged `heltec-v4-vX.Y`, and the
+crates follow upstream's `crates/` layout. Licensing is unchanged: BSD 3-Clause plus the patent grant in
 `PATENTS`. Each change is described in its commit message.
 
 ---
