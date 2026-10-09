@@ -1,9 +1,37 @@
 > [!NOTE]
-> **Unofficial fork.** The `heltec-v4` branch adds an ESP-IDF (ESP32-S3) port and fixes, used by
-> [a Meshtastic firmware branch that adds Tailscale](https://github.com/almostunix/firmware/tree/tailscale-heltec-v4).
-> It is not affiliated with or endorsed by Tailscale Inc. Upstream: <https://github.com/tailscale/tailscale-rs>.
-> Licensing is unchanged: BSD 3-Clause plus the patent grant in `PATENTS`. The commit messages on this
-> branch describe each change. Firmware builds use `cargo build -p ts_ffi --profile firmware`.
+> **Unofficial fork** of [tailscale/tailscale-rs](https://github.com/tailscale/tailscale-rs). It is not
+> affiliated with or endorsed by Tailscale Inc.
+
+## About this fork
+
+The `heltec-v4` branch ports tailscale-rs to ESP-IDF (ESP32-S3), with the fixes that port needed. It is
+used by [a Meshtastic firmware branch](https://github.com/almostunix/firmware/tree/tailscale-heltec-v4)
+that serves the Meshtastic phone API on a tailnet; to set up a node, start with its
+[quick start](https://github.com/almostunix/firmware/blob/tailscale-heltec-v4/TAILSCALE-QUICKSTART.md).
+
+**What the branch adds**
+
+- An ESP-IDF build of `ts_ffi`: pure-Rust TLS, a PSRAM-first allocator, tokio sized for the chip, and a
+  `firmware` cargo profile.
+- `ts_set_ecdsa_verifier`, so an embedder can hand certificate checks to a faster ECDSA library (mbedTLS
+  on the ESP32).
+- TCP keep-alive and timeouts in the netstack, and `ts_tcp_shutdown`.
+- Fixes found on the way: WireGuard handshake replay protection, control reconnects and dial-plan
+  priority, relay selection by STUN, and an ESP-IDF thread-handle leak.
+
+**Building for the ESP32-S3** (toolchain from [espup](https://github.com/esp-rs/espup)):
+
+```bash
+. ~/export-esp.sh
+RUSTUP_TOOLCHAIN=esp cargo build -p ts_ffi --profile firmware \
+  --target xtensa-esp32s3-espidf -Zbuild-std=std,panic_abort
+```
+
+**Status:** tested on a Heltec WiFi LoRa 32 V4. Releases are tagged `heltec-v4-vX.Y`, and the crates
+follow upstream's `crates/` layout. Licensing is unchanged: BSD 3-Clause plus the patent grant in
+`PATENTS`. Each change is described in its commit message.
+
+---
 
 # tailscale-rs
 
@@ -21,9 +49,9 @@ https://tailscale.com
 
 The following instructions are for Rust! For other languages, see the language-specific README:
 
-- [C](ts_ffi/README.md)
-- [Elixir](ts_elixir/README.md)
-- [Python](ts_python/README.md)
+- [C](crates/bindings/ts_ffi/README.md)
+- [Elixir](crates/bindings/ts_elixir/README.md)
+- [Python](crates/bindings/ts_python/README.md)
 
 Add this dependency line to your `Cargo.toml`:
 

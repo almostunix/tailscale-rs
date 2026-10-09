@@ -54,7 +54,7 @@ is managed by `uv`.
 
 ### Setup
 
-1. Install an appropriate Rust toolchain for your platform. [See here](../README.md#msrv-and-edition)
+1. Install an appropriate Rust toolchain for your platform. [See here](../../../README.md#msrv-and-edition)
    for supported toolchain versions.
 2. [Install `uv`](https://docs.astral.sh/uv/getting-started/installation/).
 3. Clone the `tailscale-rs` repository.

@@ -3,7 +3,7 @@
 C bindings to `tailscale-rs`.
 
 `tailscale.h` is automatically generated in this directory when you `cargo build`. The library name
-is `tailscalers` (`../target/*/libtailscalers.{a,so}`).
+is `tailscalers` (`target/*/libtailscalers.{a,so}` at the workspace root).
 
 For microcontroller firmware, build with `--profile firmware` (smallest code, abort on panic). On a slow
 CPU, `ts_set_ecdsa_verifier` can hand TLS certificate signature checks to a faster ECDSA library, such

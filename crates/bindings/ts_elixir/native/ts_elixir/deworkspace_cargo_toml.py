@@ -6,7 +6,7 @@ and references to the cargo workspace.
 
 Usage:
 
-    $ deworkspace_cargo_toml.py --root ../../../Cargo.toml < Cargo.toml
+    $ deworkspace_cargo_toml.py --root ../../../../../Cargo.toml < Cargo.toml
 
 """
 
